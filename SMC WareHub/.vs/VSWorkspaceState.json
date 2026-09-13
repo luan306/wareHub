@@ -1,0 +1,13 @@
+{
+  "ExpandedNodes": [
+    "",
+    "\\backend-dotnet",
+    "\\backend-dotnet\\bin",
+    "\\backend-dotnet\\Contracts",
+    "\\backend-dotnet\\Data",
+    "\\backend-dotnet\\obj",
+    "\\backend-dotnet\\Properties"
+  ],
+  "SelectedNode": "\\backend-dotnet\\Program.cs",
+  "PreviewInSolutionExplorer": false
+}
