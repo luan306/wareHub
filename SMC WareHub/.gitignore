@@ -1,0 +1,25 @@
+# .NET backend
+backend-dotnet/bin/
+backend-dotnet/obj/
+backend-dotnet/appsettings.Development.json
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# IDE / editor
+.vs/
+*.user
+.vscode/
+
+# Env files (never commit real secrets)
+.env
+.env.local
+.env.*.local
+
+# OS noise
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
