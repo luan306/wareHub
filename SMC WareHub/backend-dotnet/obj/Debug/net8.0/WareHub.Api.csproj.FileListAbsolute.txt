@@ -44,3 +44,4 @@ D:\SMC WareHub\backend-dotnet\obj\Debug\net8.0\WareHub.Api.pdb
 D:\SMC WareHub\backend-dotnet\obj\Debug\net8.0\WareHub.Api.genruntimeconfig.cache
 D:\SMC WareHub\backend-dotnet\obj\Debug\net8.0\ref\WareHub.Api.dll
 D:\SMC WareHub\backend-dotnet\bin\Debug\net8.0\BCrypt.Net-Next.dll
+D:\SMC WareHub\backend-dotnet\bin\Debug\net8.0\appsettings.Development.example.json

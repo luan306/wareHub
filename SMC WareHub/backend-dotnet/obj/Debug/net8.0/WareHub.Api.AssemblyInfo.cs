@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("WareHub.Api")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+9dc0ff3cf43562b04badc523d985bd4a25b69463")]
 [assembly: System.Reflection.AssemblyProductAttribute("WareHub.Api")]
 [assembly: System.Reflection.AssemblyTitleAttribute("WareHub.Api")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

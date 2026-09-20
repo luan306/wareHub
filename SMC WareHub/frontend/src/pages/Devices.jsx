@@ -45,6 +45,7 @@ export function Devices() {
   const [printDialogOpen, setPrintDialogOpen] = useState(false);
   const [khoConflict, setKhoConflict] = useState(null);
   const [exporting, setExporting] = useState(false);
+  const [syncingGlpi, setSyncingGlpi] = useState(false);
   const requestVersion = useRef(0);
 
   const fetchDevices = useCallback(async () => {
@@ -215,6 +216,21 @@ export function Devices() {
     }
   }
 
+  async function syncFromGlpi() {
+    if (!confirm('Đồng bộ danh sách máy tính từ GLPI vào WareHub? Thiết bị đã có (khớp Serial Number) sẽ được cập nhật, thiết bị mới sẽ được thêm vào (ở trạng thái chưa kích hoạt).')) return;
+    setSyncingGlpi(true);
+    setError('');
+    try {
+      const result = await api.post('/devices/glpi-sync', {});
+      alert(`Đồng bộ xong: ${result.created} thiết bị mới, ${result.updated} thiết bị cập nhật, ${result.unchanged} không đổi, ${result.skipped} bỏ qua (thiếu Serial Number) — tổng ${result.total} máy từ GLPI.`);
+      fetchDevices();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSyncingGlpi(false);
+    }
+  }
+
   function openCreateModal() {
     setForm(emptyForm);
     setFormError('');
@@ -369,6 +385,7 @@ export function Devices() {
         <h2>Account Manage</h2>
         <div className="manage-actions">
           <button className="btn-secondary" type="button" onClick={exportInventory} disabled={exporting}>{exporting ? 'Đang xuất...' : 'Export Inventory'}</button>
+          {isAdmin && <button className="btn-secondary" type="button" onClick={syncFromGlpi} disabled={syncingGlpi}>{syncingGlpi ? 'Đang đồng bộ...' : 'Đồng bộ từ GLPI'}</button>}
           {isAdmin && <button className="btn-primary" type="button" onClick={openCreateModal}>Add New</button>}
           <button className="btn-primary" type="button" onClick={openPrintListModal} disabled={selected.size === 0 && queue.length === 0}>Print Label List</button>
         </div>

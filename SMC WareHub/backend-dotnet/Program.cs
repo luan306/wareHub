@@ -10,6 +10,7 @@ using Microsoft.IdentityModel.Tokens;
 using QRCoder;
 using WareHub.Api.Contracts;
 using WareHub.Api.Data;
+using WareHub.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
@@ -29,6 +30,8 @@ builder.Services.AddDbContext<WareHubDbContext>(options =>
         mysql.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(10), errorNumbersToAdd: null)
              .CommandTimeout(30)));
 builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
+builder.Services.Configure<GlpiOptions>(configuration.GetSection(GlpiOptions.SectionName));
+builder.Services.AddHttpClient<GlpiClient>();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
 {
     options.TokenValidationParameters = new TokenValidationParameters
@@ -160,6 +163,65 @@ devices.MapGet("/history", async (string? search, string? from, string? to, int 
         .ToListAsync();
     return Results.Ok(new { history = rows, total, page, pageSize });
 }).RequireAuthorization("admin");
+devices.MapPost("/glpi-sync", async (HttpContext context, WareHubDbContext db, GlpiClient glpi) =>
+{
+    if (!glpi.IsConfigured)
+        return Results.BadRequest(new { error = "Chưa cấu hình kết nối GLPI. Thêm mục \"Glpi\" (BaseUrl, ClientId, ClientSecret, Username, Password) vào appsettings.Development.json." });
+
+    List<GlpiComputer> computers;
+    try { computers = await glpi.GetComputersAsync(context.RequestAborted); }
+    catch (InvalidOperationException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status502BadGateway); }
+
+    var currentUser = (User)context.Items["CurrentUser"]!;
+    var existingBySerial = await db.Devices.ToDictionaryAsync(x => x.Ma);
+    int created = 0, updated = 0, unchanged = 0, skipped = 0;
+
+    foreach (var c in computers)
+    {
+        var serial = Truncate(c.Serial, 50);
+        if (string.IsNullOrWhiteSpace(serial)) { skipped++; continue; }
+
+        if (existingBySerial.TryGetValue(serial, out var existing))
+        {
+            var before = SnapshotDevice(existing);
+            existing.Ten = Truncate(c.Name, 150) is { Length: > 0 } newTen ? newTen : existing.Ten;
+            existing.Model = Truncate(c.Model?.Name, 150);
+            existing.Producer = Truncate(c.Manufacturer?.Name, 100);
+            existing.UserName = Truncate(c.User?.Name, 100);
+            existing.PhongBan = Truncate(c.Location?.Name, 100);
+            existing.GhiChu = Truncate(c.Comment, 500);
+            var after = SnapshotDevice(existing);
+            var changes = DiffDevice(before, after);
+            if (changes.Count > 0)
+            {
+                db.DeviceHistory.AddRange(changes.Select(ch => new DeviceHistory { DeviceId = existing.Id, UserId = currentUser.Id, FieldName = ch.Field, OldValue = ch.OldValue, NewValue = ch.NewValue }));
+                updated++;
+            }
+            else unchanged++;
+        }
+        else
+        {
+            db.Devices.Add(new Device
+            {
+                Ma = serial,
+                Ten = Truncate(c.Name, 150) is { Length: > 0 } ten ? ten : serial,
+                Loai = "laptop",
+                Kho = "24",
+                Model = Truncate(c.Model?.Name, 150),
+                Producer = Truncate(c.Manufacturer?.Name, 100),
+                UserName = Truncate(c.User?.Name, 100),
+                PhongBan = Truncate(c.Location?.Name, 100),
+                GhiChu = Truncate(c.Comment, 500),
+                IsActive = false,
+                LifecycleStatus = "new",
+            });
+            created++;
+        }
+    }
+
+    await db.SaveChangesAsync();
+    return Results.Ok(new { ok = true, total = computers.Count, created, updated, unchanged, skipped });
+}).RequireAuthorization("admin");
 devices.MapPost("/{id:int}/clone", async (int id, CloneRequest request, WareHubDbContext db) =>
 {
     if (string.IsNullOrWhiteSpace(request.Ma)) return Results.BadRequest(new { error = "Vui lòng nhập mã thiết bị mới" });
@@ -260,6 +322,7 @@ static string? ValidateDevice(DeviceRequest request)
 }
 static Device ToDevice(DeviceRequest request, bool preserveActive) { var device = new Device(); CopyDevice(device, request); if (!preserveActive) { device.IsActive = false; device.LifecycleStatus = "new"; } return device; }
 static void CopyDevice(Device target, DeviceRequest request) { target.Ma = request.Ma!.Trim(); target.Ten = request.Ten!.Trim(); target.Loai = request.Loai!; target.Kho = request.Loai == "phone" ? "12" : "24"; target.Model = request.Model; target.Cpu = request.Cpu; target.Ram = request.Ram; target.Storage = request.Storage; target.IsActive = request.IsActive; target.LifecycleStatus = target.LifecycleStatus == "new" && request.IsActive ? "old" : target.LifecycleStatus; target.UserName = request.UserName; target.RegisteredAt = request.RegisteredAt; target.PhongBan = request.PhongBan; target.GhiChu = request.GhiChu; target.Producer = request.Producer; target.IpAddress = request.IpAddress; }
+static string? Truncate(string? value, int max) => string.IsNullOrWhiteSpace(value) ? null : (value.Length > max ? value[..max] : value);
 static Dictionary<string, string?> SnapshotDevice(Device device) => new()
 {
     ["ma"] = device.Ma,
