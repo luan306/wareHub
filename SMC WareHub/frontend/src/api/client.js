@@ -23,7 +23,9 @@ async function request(path, { method = 'GET', body, params } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
 
-  if (res.status === 401) {
+  // 401 từ chính endpoint đăng nhập nghĩa là sai tài khoản/mật khẩu, không phải phiên hết hạn —
+  // để rơi xuống nhánh bên dưới hiện đúng lỗi từ server, không tự redirect/xoá phiên.
+  if (res.status === 401 && path !== '/auth/login') {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     window.location.href = '/login';
