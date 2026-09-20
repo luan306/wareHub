@@ -18,7 +18,7 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
             entity.HasIndex(x => x.Username).IsUnique();
             entity.Property(x => x.FullName).HasMaxLength(100).IsRequired();
             entity.Property(x => x.Role).HasConversion<string>().HasMaxLength(10);
-            entity.Property(x => x.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP").ValueGeneratedOnAdd();
+            entity.Property(x => x.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP(6)").ValueGeneratedOnAdd();
         });
         modelBuilder.Entity<Device>(entity =>
         {
@@ -28,8 +28,8 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
             entity.Property(x => x.Ten).HasMaxLength(150).IsRequired();
             entity.Property(x => x.Loai).HasMaxLength(20).IsRequired();
             entity.Property(x => x.Kho).HasMaxLength(2).IsRequired();
-            entity.Property(x => x.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP").ValueGeneratedOnAdd();
-            entity.Property(x => x.UpdatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP").ValueGeneratedOnAddOrUpdate();
+            entity.Property(x => x.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP(6)").ValueGeneratedOnAdd();
+            entity.Property(x => x.UpdatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP(6)").ValueGeneratedOnAddOrUpdate();
             entity.Property(x => x.Model).HasMaxLength(150);
             entity.Property(x => x.Cpu).HasMaxLength(100);
             entity.Property(x => x.Ram).HasMaxLength(100);
@@ -47,7 +47,7 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
         modelBuilder.Entity<PrintHistory>(entity =>
         {
             entity.HasKey(x => x.Id);
-            entity.Property(x => x.PrintedAt).HasDefaultValueSql("CURRENT_TIMESTAMP").ValueGeneratedOnAdd();
+            entity.Property(x => x.PrintedAt).HasDefaultValueSql("CURRENT_TIMESTAMP(6)").ValueGeneratedOnAdd();
             entity.HasIndex(x => x.PrintedAt);
             entity.HasOne(x => x.Device).WithMany(x => x.PrintHistory).HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(x => x.User).WithMany(x => x.PrintHistory).HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
@@ -58,7 +58,7 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
             entity.Property(x => x.FieldName).HasMaxLength(30).IsRequired();
             entity.Property(x => x.OldValue).HasMaxLength(255);
             entity.Property(x => x.NewValue).HasMaxLength(255);
-            entity.Property(x => x.ChangedAt).HasDefaultValueSql("CURRENT_TIMESTAMP").ValueGeneratedOnAdd();
+            entity.Property(x => x.ChangedAt).HasDefaultValueSql("CURRENT_TIMESTAMP(6)").ValueGeneratedOnAdd();
             entity.HasIndex(x => x.ChangedAt);
             entity.HasIndex(x => x.DeviceId);
             entity.HasOne(x => x.Device).WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
