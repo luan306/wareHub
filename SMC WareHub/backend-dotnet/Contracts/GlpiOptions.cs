@@ -22,6 +22,9 @@ public sealed class GlpiOptions
     /// <summary>Đường dẫn (không kèm BaseUrl) để lấy danh sách máy tính. Có thể chỉnh nếu khác API version.</summary>
     public string ComputerEndpoint { get; set; } = "/v2.3/Assets/Computer";
 
+    /// <summary>Đường dẫn lấy danh sách điện thoại (Phone) từ GLPI.</summary>
+    public string PhoneEndpoint { get; set; } = "/v2.3/Assets/Phone";
+
     public bool IsConfigured => !string.IsNullOrWhiteSpace(BaseUrl) && !string.IsNullOrWhiteSpace(ClientId)
         && !string.IsNullOrWhiteSpace(Username) && !string.IsNullOrWhiteSpace(Password);
 }

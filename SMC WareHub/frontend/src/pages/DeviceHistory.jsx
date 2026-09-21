@@ -55,7 +55,6 @@ export function DeviceHistory() {
     <div>
       <div className="page-head">
         <h2>Lịch sử thay đổi thiết bị</h2>
-        <p className="page-intro">Theo dõi ai đã đổi trường nào của thiết bị, lúc nào — giá trị cũ và mới.</p>
       </div>
 
       <div className="toolbar">

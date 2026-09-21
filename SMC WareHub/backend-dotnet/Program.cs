@@ -163,23 +163,48 @@ devices.MapGet("/history", async (string? search, string? from, string? to, int 
         .ToListAsync();
     return Results.Ok(new { history = rows, total, page, pageSize });
 }).RequireAuthorization("admin");
+devices.MapGet("/glpi-debug", (GlpiClient glpi, IConfiguration config) =>
+{
+    var section = config.GetSection("Glpi");
+    return Results.Ok(new
+    {
+        isConfigured = glpi.IsConfigured,
+        sectionExists = section.Exists(),
+        baseUrlLen = section["BaseUrl"]?.Length ?? -1,
+        clientIdLen = section["ClientId"]?.Length ?? -1,
+        usernameLen = section["Username"]?.Length ?? -1,
+        passwordLen = section["Password"]?.Length ?? -1,
+    });
+}).RequireAuthorization("admin");
 devices.MapPost("/glpi-sync", async (HttpContext context, WareHubDbContext db, GlpiClient glpi) =>
 {
     if (!glpi.IsConfigured)
         return Results.BadRequest(new { error = "Chưa cấu hình kết nối GLPI. Thêm mục \"Glpi\" (BaseUrl, ClientId, ClientSecret, Username, Password) vào appsettings.Development.json." });
 
-    List<GlpiComputer> computers;
+    List<GlpiAsset> computers;
     try { computers = await glpi.GetComputersAsync(context.RequestAborted); }
     catch (InvalidOperationException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status502BadGateway); }
 
+    // Lỗi phía điện thoại (vd. sai đường dẫn) không được làm hỏng phần máy tính đã lấy được.
+    List<GlpiAsset> phones = [];
+    string? phoneError = null;
+    try { phones = await glpi.GetPhonesAsync(context.RequestAborted); }
+    catch (InvalidOperationException ex) { phoneError = ex.Message; }
+
+    var assets = computers.Select(c => (Asset: c, Loai: "laptop", Kho: "24"))
+        .Concat(phones.Select(p => (Asset: p, Loai: "phone", Kho: "12")))
+        .ToList();
+
     var currentUser = (User)context.Items["CurrentUser"]!;
     var existingBySerial = await db.Devices.ToDictionaryAsync(x => x.Ma);
-    int created = 0, updated = 0, unchanged = 0, skipped = 0;
+    var seenSerials = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    int created = 0, updated = 0, unchanged = 0, skipped = 0, duplicates = 0;
 
-    foreach (var c in computers)
+    foreach (var (c, loai, kho) in assets)
     {
         var serial = Truncate(c.Serial, 50);
         if (string.IsNullOrWhiteSpace(serial)) { skipped++; continue; }
+        if (!seenSerials.Add(serial)) { duplicates++; continue; }
 
         if (existingBySerial.TryGetValue(serial, out var existing))
         {
@@ -205,8 +230,8 @@ devices.MapPost("/glpi-sync", async (HttpContext context, WareHubDbContext db, G
             {
                 Ma = serial,
                 Ten = Truncate(c.Name, 150) is { Length: > 0 } ten ? ten : serial,
-                Loai = "laptop",
-                Kho = "24",
+                Loai = loai,
+                Kho = kho,
                 Model = Truncate(c.Model?.Name, 150),
                 Producer = Truncate(c.Manufacturer?.Name, 100),
                 UserName = Truncate(c.User?.Name, 100),
@@ -220,7 +245,7 @@ devices.MapPost("/glpi-sync", async (HttpContext context, WareHubDbContext db, G
     }
 
     await db.SaveChangesAsync();
-    return Results.Ok(new { ok = true, total = computers.Count, created, updated, unchanged, skipped });
+    return Results.Ok(new { ok = true, total = assets.Count, computers = computers.Count, phones = phones.Count, phone_error = phoneError, created, updated, unchanged, skipped, duplicates });
 }).RequireAuthorization("admin");
 devices.MapPost("/{id:int}/clone", async (int id, CloneRequest request, WareHubDbContext db) =>
 {
@@ -288,11 +313,95 @@ print.MapGet("/history", async (string? from, string? to, string? search, int pa
     var total = await query.CountAsync(); var rows = await query.OrderByDescending(x => x.PrintedAt).Skip((page - 1) * pageSize).Take(pageSize).Select(x => new { x.Id, printed_at = x.PrintedAt, x.Device.Ma, x.Device.Ten, x.Device.Loai, x.Device.Kho, printed_by = x.User.FullName }).ToListAsync(); return Results.Ok(new { history = rows, total, page, pageSize });
 });
 
+var handovers = app.MapGroup("/api/handovers").RequireAuthorization();
+handovers.MapGet("/next-no", async (DateOnly? date, WareHubDbContext db) =>
+{
+    var day = date ?? DateOnly.FromDateTime(DateTime.Today);
+    if (day.Year is < 2000 or > 2099) return Results.BadRequest(new { error = "Ngày lập biên bản không hợp lệ" });
+    return Results.Ok(new { no = await NextHandoverNoAsync(db, day) });
+});
+handovers.MapPost("/", async (HandoverRequest request, HttpContext context, WareHubDbContext db) =>
+{
+    var day = request.RegisterDate ?? DateOnly.FromDateTime(DateTime.Today);
+    if (day.Year is < 2000 or > 2099) return Results.BadRequest(new { error = "Ngày lập biên bản không hợp lệ" });
+    var device = request.DeviceId is int deviceId ? await db.Devices.AsNoTracking().SingleOrDefaultAsync(x => x.Id == deviceId) : null;
+    var user = (User)context.Items["CurrentUser"]!;
+    // Hai người in cùng lúc có thể tính ra cùng một số; unique index trên `no` chặn trùng, ta thử lại với số kế tiếp.
+    for (var attempt = 0; attempt < 5; attempt++)
+    {
+        var no = await NextHandoverNoAsync(db, day);
+        db.Handovers.Add(new Handover { No = no, DeviceId = device?.Id, DeviceMa = device?.Ma, FullName = Truncate(request.FullName, 100), Payload = HandoverPayload(request.Data), UserId = user.Id });
+        try { await db.SaveChangesAsync(); return Results.Ok(new { no }); }
+        catch (DbUpdateException) { db.ChangeTracker.Clear(); }
+    }
+    return Results.Conflict(new { error = "Không cấp được số phiếu, vui lòng thử lại" });
+});
+handovers.MapPut("/{no}", async (string no, HandoverUpdateRequest request, WareHubDbContext db) =>
+{
+    var handover = await db.Handovers.SingleOrDefaultAsync(x => x.No == no);
+    if (handover is null) return Results.NotFound(new { error = "Không tìm thấy phiếu" });
+    handover.FullName = Truncate(request.FullName, 100);
+    handover.Payload = HandoverPayload(request.Data);
+    await db.SaveChangesAsync();
+    return Results.Ok(new { no = handover.No });
+});
+// Phiếu gần nhất của chính thiết bị; nếu chưa có thì lấy phiếu gần nhất của thiết bị cùng model để tái dùng thông số.
+handovers.MapGet("/latest", async (int device_id, string? model, WareHubDbContext db) =>
+{
+    var latest = await db.Handovers.AsNoTracking().Where(x => x.DeviceId == device_id && x.Payload != null)
+        .OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id).FirstOrDefaultAsync();
+    if (latest is not null)
+        return Results.Ok(new { found = true, source = "device", no = latest.No, created_at = latest.CreatedAt, data = JsonSerializer.Deserialize<JsonElement>(latest.Payload!) });
+
+    if (!string.IsNullOrWhiteSpace(model))
+    {
+        var candidates = await db.Handovers.AsNoTracking().Where(x => x.Payload != null && x.Payload.Contains(model))
+            .OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id).Take(30).ToListAsync();
+        foreach (var candidate in candidates)
+        {
+            var data = JsonSerializer.Deserialize<JsonElement>(candidate.Payload!);
+            if (data.TryGetProperty("model", out var modelValue) && string.Equals(modelValue.GetString()?.Trim(), model.Trim(), StringComparison.OrdinalIgnoreCase))
+                return Results.Ok(new { found = true, source = "model", no = candidate.No, created_at = candidate.CreatedAt, data });
+        }
+    }
+    return Results.Ok(new { found = false });
+});
+handovers.MapGet("/", async (string? search, int? page, int? pageSize, WareHubDbContext db) =>
+{
+    var query = db.Handovers.AsNoTracking().AsQueryable();
+    if (!string.IsNullOrWhiteSpace(search))
+    {
+        var term = search.Trim();
+        query = query.Where(x => x.No.Contains(term) || (x.FullName ?? "").Contains(term) || (x.DeviceMa ?? "").Contains(term) || (x.Payload ?? "").Contains(term));
+    }
+    var currentPage = Math.Max(page ?? 1, 1);
+    var limit = Math.Clamp(pageSize ?? 30, 1, 100);
+    var total = await query.CountAsync();
+    var rows = await query.OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id).Skip((currentPage - 1) * limit).Take(limit).ToListAsync();
+    var userIds = rows.Select(x => x.UserId).Distinct().ToList();
+    var userNames = await db.Users.AsNoTracking().Where(x => userIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.FullName);
+    var items = rows.Select(x => new
+    {
+        x.Id, x.No, x.DeviceId, x.DeviceMa, x.FullName, x.CreatedAt,
+        PrintedBy = userNames.GetValueOrDefault(x.UserId),
+        Data = x.Payload is null ? (JsonElement?)null : JsonSerializer.Deserialize<JsonElement>(x.Payload),
+    });
+    return Results.Ok(new { handovers = items, total, page = currentPage, pageSize = limit, totalPages = Math.Max((int)Math.Ceiling(total / (double)limit), 1) });
+});
+handovers.MapDelete("/{no}", async (string no, WareHubDbContext db) =>
+{
+    var handover = await db.Handovers.SingleOrDefaultAsync(x => x.No == no);
+    if (handover is null) return Results.NotFound(new { error = "Không tìm thấy phiếu" });
+    db.Handovers.Remove(handover);
+    await db.SaveChangesAsync();
+    return Results.Ok(new { ok = true });
+}).RequireAuthorization("admin");
+
 var qr = app.MapGroup("/api/qr").RequireAuthorization();
 qr.MapGet("/devices/{deviceId:int}", async (int deviceId, int? size, WareHubDbContext db) =>
 {
     var device = await db.Devices.AsNoTracking().SingleOrDefaultAsync(x => x.Id == deviceId); if (device is null) return Results.NotFound(new { error = "Không tìm thấy thiết bị" });
-    var pixels = Math.Clamp(size ?? 256, 64, 1024); var payload = string.Join("$", new[] { device.Ma, device.Model ?? device.Ten, device.Cpu, device.Ram, device.Storage }.Select(x => (x ?? "").Replace("$", " ").Replace("\r", " ").Replace("\n", " ").Trim()));
+    var pixels = Math.Clamp(size ?? 256, 64, 1024); var payload = device.Ma.Trim();
     using var generator = new QRCodeGenerator(); using var data = generator.CreateQrCode(payload, QRCodeGenerator.ECCLevel.M); var png = new PngByteQRCode(data).GetGraphic(Math.Max(pixels / 25, 4)); return Results.File(png, "image/png");
 });
 
@@ -338,6 +447,18 @@ static Dictionary<string, string?> SnapshotDevice(Device device) => new()
 };
 static List<(string Field, string? OldValue, string? NewValue)> DiffDevice(Dictionary<string, string?> before, Dictionary<string, string?> after) =>
     before.Where(entry => entry.Value != after[entry.Key]).Select(entry => (entry.Key, entry.Value, after[entry.Key])).ToList();
+// Nội dung phiếu là JSON do trang web gửi lên; chỉ nhận object và giới hạn dung lượng để không nhét rác vào DB.
+static string? HandoverPayload(JsonElement? data) =>
+    data is { ValueKind: JsonValueKind.Object } value && value.GetRawText().Length <= 16_000 ? value.GetRawText() : null;
+// Số phiếu bàn giao dạng YYMMxxx: 2609001 = năm 26, tháng 09, phiếu thứ 001 của tháng đó.
+static async Task<string> NextHandoverNoAsync(WareHubDbContext db, DateOnly day)
+{
+    var prefix = $"{day.Year % 100:D2}{day.Month:D2}";
+    var last = await db.Handovers.AsNoTracking().Where(x => x.No.StartsWith(prefix))
+        .OrderByDescending(x => x.No.Length).ThenByDescending(x => x.No).Select(x => x.No).FirstOrDefaultAsync();
+    var sequence = last is null ? 1 : int.Parse(last[prefix.Length..]) + 1;
+    return $"{prefix}{sequence:D3}";
+}
 static object UserDto(User user) => new { user.Id, user.Username, user.FullName, user.Role, is_active = user.IsActive };
 static bool VerifyPassword(User user, string password, IPasswordHasher<User> hasher)
 {
@@ -346,11 +467,29 @@ static bool VerifyPassword(User user, string password, IPasswordHasher<User> has
     return hasher.VerifyHashedPassword(user, user.PasswordHash, password) != PasswordVerificationResult.Failed;
 }
 static string CreateToken(User user, IConfiguration config) { var claims = new[] { new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()), new Claim(JwtRegisteredClaimNames.UniqueName, user.Username), new Claim(ClaimTypes.Role, user.Role), new Claim("full_name", user.FullName) }; var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["Jwt:Secret"]!)); var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256); var expires = DateTime.UtcNow.AddHours(config.GetValue("Jwt:ExpiresInHours", 8)); return new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(claims: claims, expires: expires, signingCredentials: credentials)); }
-static async Task InitializeDatabaseAsync(IServiceProvider services, IConfiguration configuration) { await using var scope = services.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<WareHubDbContext>(); for (var attempt = 1; attempt <= 20; attempt++) { try { await db.Database.EnsureCreatedAsync(); await EnsureDeviceColumnAsync(db, "producer"); await EnsureDeviceColumnAsync(db, "ip_address"); await EnsureIndexAsync(db, "devices", "IX_devices_Loai", "`Loai`"); await EnsureIndexAsync(db, "devices", "IX_devices_LifecycleStatus", "`lifecycle_status`"); await EnsureIndexAsync(db, "devices", "IX_devices_IsActive", "`is_active`"); await EnsureIndexAsync(db, "devices", "IX_devices_PhongBan", "`phong_ban`"); await EnsureIndexAsync(db, "print_history", "IX_print_history_PrintedAt", "`printed_at`"); await EnsureDeviceHistoryTableAsync(db); if (!await db.Users.AnyAsync()) { var user = new User { Username = configuration["DefaultAdmin:User"] ?? "admin", FullName = configuration["DefaultAdmin:FullName"] ?? "Quản trị viên", Role = "admin" }; var password = configuration["DefaultAdmin:Password"] ?? throw new InvalidOperationException("Thiếu DefaultAdmin:Password"); user.PasswordHash = scope.ServiceProvider.GetRequiredService<IPasswordHasher<User>>().HashPassword(user, password); db.Users.Add(user); await db.SaveChangesAsync(); } return; } catch when (attempt < 20) { await Task.Delay(2000); } } }
+static async Task InitializeDatabaseAsync(IServiceProvider services, IConfiguration configuration) { await using var scope = services.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<WareHubDbContext>(); for (var attempt = 1; attempt <= 20; attempt++) { try { await db.Database.EnsureCreatedAsync(); await EnsureDeviceColumnAsync(db, "producer"); await EnsureDeviceColumnAsync(db, "ip_address"); await EnsureIndexAsync(db, "devices", "IX_devices_Loai", "`Loai`"); await EnsureIndexAsync(db, "devices", "IX_devices_LifecycleStatus", "`lifecycle_status`"); await EnsureIndexAsync(db, "devices", "IX_devices_IsActive", "`is_active`"); await EnsureIndexAsync(db, "devices", "IX_devices_PhongBan", "`phong_ban`"); await EnsureIndexAsync(db, "print_history", "IX_print_history_PrintedAt", "`printed_at`"); await EnsureDeviceHistoryTableAsync(db); await EnsureHandoverTableAsync(db); if (!await db.Users.AnyAsync()) { var user = new User { Username = configuration["DefaultAdmin:User"] ?? "admin", FullName = configuration["DefaultAdmin:FullName"] ?? "Quản trị viên", Role = "admin" }; var password = configuration["DefaultAdmin:Password"] ?? throw new InvalidOperationException("Thiếu DefaultAdmin:Password"); user.PasswordHash = scope.ServiceProvider.GetRequiredService<IPasswordHasher<User>>().HashPassword(user, password); db.Users.Add(user); await db.SaveChangesAsync(); } return; } catch when (attempt < 20) { await Task.Delay(2000); } } }
 static async Task EnsureDeviceColumnAsync(WareHubDbContext db, string columnName) { var exists = await db.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS `Value` FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'devices' AND column_name = {0}", columnName).SingleAsync(); if (exists == 0) { var sql = columnName switch { "producer" => "ALTER TABLE devices ADD COLUMN producer VARCHAR(100) NULL", "ip_address" => "ALTER TABLE devices ADD COLUMN ip_address VARCHAR(45) NULL", _ => throw new InvalidOperationException("Cột thiết bị không hợp lệ") }; await db.Database.ExecuteSqlRawAsync(sql); } }
 #pragma warning disable EF1002 // table/indexName/columnExpression are always hardcoded call-site literals from InitializeDatabaseAsync above, never user input
 static async Task EnsureIndexAsync(WareHubDbContext db, string table, string indexName, string columnExpression) { var exists = await db.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS `Value` FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = {0} AND index_name = {1}", table, indexName).SingleAsync(); if (exists == 0) await db.Database.ExecuteSqlRawAsync($"CREATE INDEX `{indexName}` ON `{table}` ({columnExpression})"); }
 #pragma warning restore EF1002
+static async Task EnsureHandoverTableAsync(WareHubDbContext db)
+{
+    await db.Database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS handovers (
+            Id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            `no` VARCHAR(12) NOT NULL,
+            device_id INT NULL,
+            device_ma VARCHAR(50) NULL,
+            full_name VARCHAR(100) NULL,
+            payload LONGTEXT NULL,
+            user_id INT NOT NULL,
+            created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            UNIQUE INDEX IX_handovers_no (`no`)
+        )
+        """);
+    var hasPayload = await db.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS `Value` FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'handovers' AND column_name = 'payload'").SingleAsync();
+    if (hasPayload == 0) await db.Database.ExecuteSqlRawAsync("ALTER TABLE handovers ADD COLUMN payload LONGTEXT NULL AFTER full_name");
+}
 static async Task EnsureDeviceHistoryTableAsync(WareHubDbContext db)
 {
     var exists = await db.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS `Value` FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'device_history'").SingleAsync();

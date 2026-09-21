@@ -18,7 +18,7 @@ export function QrLibrary() {
     try {
       const data = await api.get('/devices', { search, page, pageSize: 24 });
       setDevices(data.devices);
-      setTotalPages(data.totalPages);
+      setTotalPages(data.total_pages);
     } catch (err) {
       setError(err.message);
     } finally {

@@ -8,6 +8,7 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<PrintHistory> PrintHistory => Set<PrintHistory>();
     public DbSet<DeviceHistory> DeviceHistory => Set<DeviceHistory>();
+    public DbSet<Handover> Handovers => Set<Handover>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -51,6 +52,15 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
             entity.HasIndex(x => x.PrintedAt);
             entity.HasOne(x => x.Device).WithMany(x => x.PrintHistory).HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(x => x.User).WithMany(x => x.PrintHistory).HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<Handover>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.No).HasMaxLength(12).IsRequired();
+            entity.HasIndex(x => x.No).IsUnique();
+            entity.Property(x => x.DeviceMa).HasMaxLength(50);
+            entity.Property(x => x.FullName).HasMaxLength(100);
+            entity.Property(x => x.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP(6)").ValueGeneratedOnAdd();
         });
         modelBuilder.Entity<DeviceHistory>(entity =>
         {

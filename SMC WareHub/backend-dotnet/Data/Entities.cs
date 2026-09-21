@@ -65,3 +65,16 @@ public sealed class DeviceHistory
     public Device Device { get; set; } = null!;
     public User User { get; set; } = null!;
 }
+
+[Table("handovers")]
+public sealed class Handover
+{
+    public int Id { get; set; }
+    [Column("no")] public string No { get; set; } = "";
+    [Column("device_id")] public int? DeviceId { get; set; }
+    [Column("device_ma")] public string? DeviceMa { get; set; }
+    [Column("full_name")] public string? FullName { get; set; }
+    [Column("payload")] public string? Payload { get; set; }
+    [Column("user_id")] public int UserId { get; set; }
+    [Column("created_at")] public DateTime CreatedAt { get; set; }
+}

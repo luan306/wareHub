@@ -3,6 +3,8 @@ import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { usePrintQueue } from '../context/PrintQueueContext';
 import { LabelPreview, PrintLabelModal } from '../components/LabelPreview';
+import { HandoverModal } from '../components/HandoverSheet';
+import { Pager } from '../components/Pager';
 
 const LOAI_LABELS = {
   laptop: 'Laptop',
@@ -25,6 +27,8 @@ export function Devices() {
   const [devices, setDevices] = useState([]);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
   const [search, setSearch] = useState('');
   const [loaiFilter, setLoaiFilter] = useState('');
   const [selected, setSelected] = useState(new Set());
@@ -37,11 +41,10 @@ export function Devices() {
   const [printListSelection, setPrintListSelection] = useState(new Set());
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState('');
-  const [specCategory, setSpecCategory] = useState('CPU');
-  const [specDetail, setSpecDetail] = useState('');
   const [printingId, setPrintingId] = useState(null);
   const [queuePrinting, setQueuePrinting] = useState(false);
   const [instantPrintDevice, setInstantPrintDevice] = useState(null);
+  const [handoverDevice, setHandoverDevice] = useState(null);
   const [printDialogOpen, setPrintDialogOpen] = useState(false);
   const [khoConflict, setKhoConflict] = useState(null);
   const [exporting, setExporting] = useState(false);
@@ -53,16 +56,18 @@ export function Devices() {
     setLoading(true);
     setError('');
     try {
-      const data = await api.get('/devices', { search, loai: loaiFilter, page, pageSize: 50 });
+      const data = await api.get('/devices', { search, loai: loaiFilter, page, pageSize });
       if (version !== requestVersion.current) return;
       setDevices(data.devices);
-      setTotalPages(data.totalPages);
+      setTotalPages(data.total_pages);
+      setTotal(data.total);
+      if (data.devices.length === 0 && page > data.total_pages) setPage(data.total_pages);
     } catch (err) {
       if (version === requestVersion.current) setError(err.message);
     } finally {
       if (version === requestVersion.current) setLoading(false);
     }
-  }, [search, loaiFilter, page]);
+  }, [search, loaiFilter, page, pageSize]);
 
   useEffect(() => {
     const t = setTimeout(fetchDevices, 250); // debounce khi gõ tìm kiếm
@@ -197,7 +202,7 @@ export function Devices() {
       do {
         const data = await api.get('/devices', { search, loai: loaiFilter, page: exportPage, pageSize: 100 });
         all.push(...data.devices);
-        exportTotalPages = data.totalPages;
+        exportTotalPages = data.total_pages;
         exportPage += 1;
       } while (exportPage <= exportTotalPages);
 
@@ -217,12 +222,19 @@ export function Devices() {
   }
 
   async function syncFromGlpi() {
-    if (!confirm('Đồng bộ danh sách máy tính từ GLPI vào WareHub? Thiết bị đã có (khớp Serial Number) sẽ được cập nhật, thiết bị mới sẽ được thêm vào (ở trạng thái chưa kích hoạt).')) return;
+    if (!confirm('Đồng bộ máy tính và điện thoại từ GLPI vào WareHub? Thiết bị đã có (khớp Serial Number) sẽ được cập nhật, thiết bị mới sẽ được thêm vào (ở trạng thái chưa kích hoạt).')) return;
     setSyncingGlpi(true);
     setError('');
     try {
       const result = await api.post('/devices/glpi-sync', {});
-      alert(`Đồng bộ xong: ${result.created} thiết bị mới, ${result.updated} thiết bị cập nhật, ${result.unchanged} không đổi, ${result.skipped} bỏ qua (thiếu Serial Number) — tổng ${result.total} máy từ GLPI.`);
+      const lines = [
+        `Đồng bộ xong: ${result.created} thiết bị mới, ${result.updated} cập nhật, ${result.unchanged} không đổi.`,
+        `Lấy từ GLPI: ${result.computers} máy tính, ${result.phones} điện thoại.`,
+      ];
+      if (result.skipped) lines.push(`${result.skipped} bỏ qua (thiếu Serial Number).`);
+      if (result.duplicates) lines.push(`${result.duplicates} bỏ qua (trùng Serial Number).`);
+      if (result.phone_error) lines.push(`Không lấy được điện thoại: ${result.phone_error}`);
+      alert(lines.join('\n'));
       fetchDevices();
     } catch (err) {
       setError(err.message);
@@ -257,7 +269,6 @@ export function Devices() {
       ghi_chu: device.ghi_chu || '',
     });
     setFormError('');
-    setSpecDetail('');
     setModalOpen(true);
   }
 
@@ -282,20 +293,7 @@ export function Devices() {
       registered_at: device.registered_at ? device.registered_at.slice(0, 10) : '',
     });
     setFormError('');
-    setSpecDetail('');
     setModalOpen(true);
-  }
-
-  function addSpecification(event) {
-    event.preventDefault();
-    const field = specCategory.toLowerCase();
-    if (!specDetail.trim()) return;
-    setForm((previous) => ({ ...previous, [field]: specDetail.trim() }));
-    setSpecDetail('');
-  }
-
-  function removeSpecification(category) {
-    setForm((previous) => ({ ...previous, [category.toLowerCase()]: '' }));
   }
 
   async function handleSaveDevice(e) {
@@ -445,6 +443,7 @@ export function Devices() {
               <td className="action-col">
                 <div className="row-actions">
                   {d.is_active && <button className="print-now-action" onClick={() => handlePrintNow(d)} disabled={printingId === d.id}>{printingId === d.id ? 'Đang in...' : 'In ngay'}</button>}
+                  <button onClick={() => setHandoverDevice(d)}>Phiếu BG</button>
                   {isAdmin && <>
                   <button onClick={() => openEditModal(d)}>Sửa</button>
                   <button onClick={() => openCloneModal(d)}>Clone</button>
@@ -468,13 +467,7 @@ export function Devices() {
       </table>
       </div>
 
-      {totalPages > 1 && (
-        <div className="pagination">
-          <button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>← Trước</button>
-          <span>Trang {page} / {totalPages}</span>
-          <button disabled={page >= totalPages} onClick={() => setPage((value) => value + 1)}>Sau →</button>
-        </div>
-      )}
+      <Pager page={page} pageSize={pageSize} total={total} totalPages={totalPages} unit="thiết bị" onPage={setPage} onPageSize={(size) => { setPage(1); setPageSize(size); }} />
 
       {printListOpen && (
         <div className="modal-backdrop" onClick={closePrintListModal}>
@@ -585,6 +578,8 @@ export function Devices() {
         )}
       </div>
 
+      {handoverDevice && <HandoverModal key={handoverDevice.id} device={handoverDevice} onClose={() => setHandoverDevice(null)} />}
+
       <PrintLabelModal
         device={instantPrintDevice}
         open={printDialogOpen}
@@ -615,20 +610,6 @@ export function Devices() {
               </div>
               <div className="form-row mb-3">
                 <div className="form-col"><label className="form-label">IP Address</label><input className="form-control" value={form.ip_address} onChange={(e) => setForm({ ...form, ip_address: e.target.value })} /></div>
-                <div className="form-col"><label className="form-label">Date</label><input className="form-control" type="date" value={form.registered_at} onChange={(e) => setForm({ ...form, registered_at: e.target.value })} /></div>
-              </div>
-              <div className="form-row mb-4"><div className="form-col"><label className="form-label">Comment</label><textarea className="form-control" rows="2" value={form.ghi_chu} onChange={(e) => setForm({ ...form, ghi_chu: e.target.value })} /></div></div>
-
-              <h6 className="text-primary mb-3">Specifications</h6>
-              <div className="form-row mb-3">
-                <div className="form-col"><label className="form-label">Category</label><select className="form-select" value={specCategory} onChange={(e) => setSpecCategory(e.target.value)}><option value="CPU">CPU</option><option value="RAM">RAM</option><option value="STORAGE">STORAGE</option></select></div>
-                <div className="form-col"><label className="form-label">Detail (Ex: RAM: 16GB,...)</label><input className="form-control" value={specDetail} onChange={(e) => setSpecDetail(e.target.value)} /></div>
-              </div>
-              <div className="spec-add-row"><button className="btn-primary" type="button" onClick={addSpecification}>+ Add</button></div>
-              <div className="table-scrollbar">
-                <table className="spec-table"><thead><tr><th>Category</th><th>Detail</th><th></th></tr></thead><tbody>
-                  {[['CPU', form.cpu], ['RAM', form.ram], ['STORAGE', form.storage]].filter(([, detail]) => detail).map(([category, detail]) => <tr key={category}><td>{category}</td><td>{detail}</td><td><button type="button" className="spec-delete" onClick={() => removeSpecification(category)} aria-label={`Remove ${category}`}>×</button></td></tr>)}
-                </tbody></table>
               </div>
               {formError && <div className="error-box">{formError}</div>}
             </div>

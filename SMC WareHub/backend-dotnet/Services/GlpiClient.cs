@@ -9,7 +9,7 @@ namespace WareHub.Api.Services;
 
 public sealed record GlpiRef(int? Id, string? Name);
 
-public sealed class GlpiComputer
+public sealed class GlpiAsset
 {
     public int Id { get; set; }
     public string? Name { get; set; }
@@ -76,24 +76,44 @@ public sealed class GlpiClient(HttpClient http, IOptions<GlpiOptions> optionsAcc
         return accessToken;
     }
 
-    public async Task<List<GlpiComputer>> GetComputersAsync(CancellationToken ct = default)
+    public Task<List<GlpiAsset>> GetComputersAsync(CancellationToken ct = default) => GetAssetsAsync(_options.ComputerEndpoint, "máy tính", ct);
+
+    public Task<List<GlpiAsset>> GetPhonesAsync(CancellationToken ct = default) => GetAssetsAsync(_options.PhoneEndpoint, "điện thoại", ct);
+
+    // GLPI chỉ trả tối đa `limit` dòng mỗi lần, nên phải lặp theo start cho tới khi hết. Dừng khi một trang không
+    // thêm được id mới nào (phòng trường hợp máy chủ bỏ qua start/limit và trả lại trang đầu mãi).
+    private async Task<List<GlpiAsset>> GetAssetsAsync(string endpoint, string label, CancellationToken ct)
     {
         if (!IsConfigured)
             throw new InvalidOperationException("Chưa cấu hình kết nối GLPI (thiếu BaseUrl/ClientId/Username/Password trong appsettings).");
 
+        const int pageSize = 100;
+        const int maxItems = 50_000;
         var token = await GetAccessTokenAsync(ct);
-        var request = new HttpRequestMessage(HttpMethod.Get, $"{_options.BaseUrl}{_options.ComputerEndpoint}");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        var all = new List<GlpiAsset>();
+        var seen = new HashSet<int>();
 
-        using var response = await http.SendAsync(request, ct);
-        var body = await response.Content.ReadAsStringAsync(ct);
-        if (!response.IsSuccessStatusCode)
+        for (var start = 0; start < maxItems; start += pageSize)
         {
-            logger.LogError("GLPI computer list request failed ({Status}): {Body}", response.StatusCode, body);
-            throw new InvalidOperationException($"Không lấy được danh sách máy tính từ GLPI (HTTP {(int)response.StatusCode}). Kiểm tra lại đường dẫn ComputerEndpoint trong cấu hình.");
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{_options.BaseUrl}{endpoint}?start={start}&limit={pageSize}");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            using var response = await http.SendAsync(request, ct);
+            var body = await response.Content.ReadAsStringAsync(ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                logger.LogError("GLPI {Label} list request failed ({Status}): {Body}", label, response.StatusCode, body);
+                throw new InvalidOperationException($"Không lấy được danh sách {label} từ GLPI (HTTP {(int)response.StatusCode}). Kiểm tra lại đường dẫn {endpoint} trong cấu hình.");
+            }
+
+            var page = JsonSerializer.Deserialize<List<GlpiAsset>>(body, SnakeCaseJson) ?? [];
+            var added = 0;
+            foreach (var item in page)
+                if (seen.Add(item.Id)) { all.Add(item); added++; }
+
+            if (page.Count < pageSize || added == 0) break;
         }
 
-        var computers = JsonSerializer.Deserialize<List<GlpiComputer>>(body, SnakeCaseJson) ?? [];
-        return computers;
+        return all;
     }
 }

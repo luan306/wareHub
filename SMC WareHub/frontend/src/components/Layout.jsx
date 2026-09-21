@@ -11,6 +11,7 @@ const NAV_GROUPS = [
     icon: '🏷',
     items: [
       { to: '/thiet-bi', icon: '▦', label: 'Thiết bị' },
+      { to: '/phieu-ban-giao', icon: '☰', label: 'Phiếu bàn giao' },
     ],
   },
   {

@@ -5,6 +5,7 @@ import { ProtectedRoute } from './components/ProtectedRoute';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
 import { Devices } from './pages/Devices';
+import { Handovers } from './pages/Handovers';
 import { DeviceHistory } from './pages/DeviceHistory';
 import { Users } from './pages/Users';
 
@@ -23,6 +24,7 @@ export default function App() {
             }
           >
             <Route path="/thiet-bi" element={<Devices />} />
+            <Route path="/phieu-ban-giao" element={<Handovers />} />
             <Route
               path="/lich-su-sua"
               element={

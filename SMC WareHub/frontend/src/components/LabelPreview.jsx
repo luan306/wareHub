@@ -1,15 +1,43 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
 import smcLogo from '../img/Logo_SMC_Corporation.svg';
+import smcLogoRaw from '../img/Logo_SMC_Corporation.svg?raw';
 
 const SMC_LOGO_URL = smcLogo;
+
+// Logo nhúng giữa QR: chữ SMC đúng tỉ lệ gốc trên nền trắng bo góc. Phải inline path SVG vì ảnh SVG
+// dạng data-URI không tải được tài nguyên ngoài.
+const QR_BADGE_W = 400;
+const QR_BADGE_H = 160;
+const QR_LOGO_W = 290;
+const QR_LOGO_H = QR_LOGO_W * (97.97 / 307.42);
+const QR_LOGO_INNER = smcLogoRaw
+  .replace(/^[\s\S]*?<svg[^>]*>/, '')
+  .replace(/<\/svg>\s*$/, '')
+  .replace('fill:#0066b3', 'fill:url(#logoGrad)');
+// Hiệu ứng nổi khối: tấm nền vát cạnh + bóng bề mặt, chữ logo chuyển sắc và đổ bóng nhẹ.
+const QR_BADGE_DEFS = '<defs>'
+  + '<linearGradient id="plate" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#d9e3ee"/></linearGradient>'
+  + '<linearGradient id="bevel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="0.5" stop-color="#b9c8d8"/><stop offset="1" stop-color="#5f7893"/></linearGradient>'
+  + '<linearGradient id="logoGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3f9df0"/><stop offset="0.55" stop-color="#0066b3"/><stop offset="1" stop-color="#003f78"/></linearGradient>'
+  + '<linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.85"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>'
+  + '<filter id="logoShadow" x="-10%" y="-20%" width="120%" height="150%"><feDropShadow dx="0" dy="5" stdDeviation="3.5" flood-color="#00264d" flood-opacity="0.45"/></filter>'
+  + '<filter id="plateShadow" x="-10%" y="-20%" width="120%" height="150%"><feDropShadow dx="0" dy="6" stdDeviation="4" flood-color="#00264d" flood-opacity="0.35"/></filter>'
+  + '</defs>';
+const QR_BADGE_URL = `data:image/svg+xml;utf8,${encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${QR_BADGE_W}" height="${QR_BADGE_H}" viewBox="0 0 ${QR_BADGE_W} ${QR_BADGE_H}">`
+  + QR_BADGE_DEFS
+  + `<rect width="${QR_BADGE_W}" height="${QR_BADGE_H}" fill="#fff"/>`
+  + `<rect x="14" y="10" width="${QR_BADGE_W - 28}" height="${QR_BADGE_H - 30}" rx="34" fill="url(#plate)" stroke="url(#bevel)" stroke-width="7" filter="url(#plateShadow)"/>`
+  + `<rect x="26" y="19" width="${QR_BADGE_W - 52}" height="${(QR_BADGE_H - 30) / 2 - 6}" rx="24" fill="url(#gloss)" opacity="0.7"/>`
+  + `<svg x="${(QR_BADGE_W - QR_LOGO_W) / 2}" y="${(QR_BADGE_H - 20 - QR_LOGO_H) / 2 + 10}" width="${QR_LOGO_W}" height="${QR_LOGO_H}" viewBox="0 0 307.42249 97.970001" filter="url(#logoShadow)">${QR_LOGO_INNER}</svg>`
+  + '</svg>',
+)}`;
 const FIT_TEXT_MAX_SIZE = 20;
 const FIT_TEXT_MIN_SIZE = 12;
 
 export function qrPayload(device) {
-  return [device.ma, device.model || device.ten, device.cpu, device.ram, device.storage]
-    .map((value) => String(value || '').replace(/[$\r\n]/g, ' ').trim())
-    .join('$');
+  return String(device.ma || '').trim();
 }
 
 // Shrinks its own font-size until the text fits on one line within the cell (never truncates
@@ -100,8 +128,9 @@ export function LabelPreview({ device, printMode = false }) {
             <QRCodeCanvas
               value={qrPayload(device)}
               size={qrSize}
-              level="M"
-              imageSettings={{ src: SMC_LOGO_URL, height: qrSize * 0.16, width: qrSize * 0.16, excavate: true }}
+              level="H"
+              includeMargin={false}
+              imageSettings={{ src: QR_BADGE_URL, width: qrSize * 0.4, height: qrSize * 0.4 * (QR_BADGE_H / QR_BADGE_W), excavate: true }}
             />
           </div>
         </div>
