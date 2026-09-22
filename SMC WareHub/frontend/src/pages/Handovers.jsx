@@ -163,7 +163,7 @@ export function Handovers() {
       )}
 
       {printItems && createPortal(
-        <div id="handover-print">
+        <div className="handover-print-root">
           {printItems.map((item) => <HandoverSheet key={item.no} data={{ ...buildHandoverData({}), ...(item.data || {}), no: item.no }} />)}
         </div>,
         document.body,

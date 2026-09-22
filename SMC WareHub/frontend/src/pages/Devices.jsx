@@ -1,9 +1,10 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal, flushSync } from 'react-dom';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { usePrintQueue } from '../context/PrintQueueContext';
 import { LabelPreview, PrintLabelModal } from '../components/LabelPreview';
-import { HandoverModal } from '../components/HandoverSheet';
+import { HandoverModal, HandoverSheet, buildHandoverData, mergeSpecs } from '../components/HandoverSheet';
 import { Pager } from '../components/Pager';
 
 const LOAI_LABELS = {
@@ -15,6 +16,30 @@ const LOAI_LABELS = {
 };
 
 const emptyForm = { id: null, source_id: null, original_ma: '', ma: '', ten: '', loai: 'laptop', model: '', producer: '', ip_address: '', cpu: '', ram: '', storage: '', is_active: false, user_name: '', registered_at: '', phong_ban: '', ghi_chu: '' };
+
+// Cột của bảng thiết bị — bấm chuột phải vào tiêu đề bảng để tick ẩn/hiện từng cột.
+const COLUMN_DEFS = [
+  { key: 'ma', label: 'Serial Number', className: 'mono', cell: (d) => d.ma },
+  { key: 'model', label: 'Model', cell: (d) => d.model || '—' },
+  { key: 'producer', label: 'Producer', cell: (d) => d.producer || '—' },
+  { key: 'loai', label: 'Type', cell: (d) => LOAI_LABELS[d.loai] },
+  { key: 'ten', label: 'Device Name', cell: (d) => d.ten },
+  { key: 'user_name', label: 'User Name', cell: (d) => d.user_name || '—' },
+  { key: 'phong_ban', label: 'Dept', cell: (d) => d.phong_ban || '—' },
+  { key: 'ip_address', label: 'IP Address', cell: (d) => d.ip_address || '—' },
+  { key: 'ghi_chu', label: 'Comment', cell: (d) => d.ghi_chu || '—' },
+  { key: 'registered_at', label: 'Date', cell: (d) => (d.registered_at ? d.registered_at.slice(0, 10) : '—') },
+];
+const COLUMN_STORAGE_KEY = 'warehub-devices-columns';
+
+function loadColumnVisibility() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(COLUMN_STORAGE_KEY) || '{}');
+    return Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, saved[c.key] !== false]));
+  } catch {
+    return Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, true]));
+  }
+}
 
 // Khớp giới hạn deviceIds tối đa của endpoint POST /print ở backend — chặn sớm ở đây
 // để tránh render hàng trăm/nghìn tem cùng lúc làm treo trình duyệt trước khi kịp báo lỗi.
@@ -31,6 +56,7 @@ export function Devices() {
   const [pageSize, setPageSize] = useState(50);
   const [search, setSearch] = useState('');
   const [loaiFilter, setLoaiFilter] = useState('');
+  const [sort, setSort] = useState({ by: null, dir: 'asc' });
   const [selected, setSelected] = useState(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -39,12 +65,18 @@ export function Devices() {
   const [printListOpen, setPrintListOpen] = useState(false);
   const [labelReviewOpen, setLabelReviewOpen] = useState(false);
   const [printListSelection, setPrintListSelection] = useState(new Set());
+  const [addedNotice, setAddedNotice] = useState('');
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState('');
   const [printingId, setPrintingId] = useState(null);
   const [queuePrinting, setQueuePrinting] = useState(false);
   const [instantPrintDevice, setInstantPrintDevice] = useState(null);
   const [handoverDevice, setHandoverDevice] = useState(null);
+  const [bulkHandoverBusy, setBulkHandoverBusy] = useState(false);
+  const [bulkHandoverItems, setBulkHandoverItems] = useState(null);
+  const [columnVisibility, setColumnVisibility] = useState(loadColumnVisibility);
+  const [columnMenu, setColumnMenu] = useState(null);
+  const columnMenuRef = useRef(null);
   const [printDialogOpen, setPrintDialogOpen] = useState(false);
   const [khoConflict, setKhoConflict] = useState(null);
   const [exporting, setExporting] = useState(false);
@@ -56,7 +88,7 @@ export function Devices() {
     setLoading(true);
     setError('');
     try {
-      const data = await api.get('/devices', { search, loai: loaiFilter, page, pageSize });
+      const data = await api.get('/devices', { search, loai: loaiFilter, page, pageSize, sortBy: sort.by || undefined, sortDir: sort.by ? sort.dir : undefined });
       if (version !== requestVersion.current) return;
       setDevices(data.devices);
       setTotalPages(data.total_pages);
@@ -67,12 +99,50 @@ export function Devices() {
     } finally {
       if (version === requestVersion.current) setLoading(false);
     }
-  }, [search, loaiFilter, page, pageSize]);
+  }, [search, loaiFilter, page, pageSize, sort]);
 
   useEffect(() => {
     const t = setTimeout(fetchDevices, 250); // debounce khi gõ tìm kiếm
     return () => clearTimeout(t);
   }, [fetchDevices]);
+
+  useEffect(() => {
+    try { localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(columnVisibility)); } catch { /* bỏ qua */ }
+  }, [columnVisibility]);
+
+  useEffect(() => {
+    if (!columnMenu) return undefined;
+    const close = (event) => {
+      if (columnMenuRef.current && columnMenuRef.current.contains(event.target)) return;
+      setColumnMenu(null);
+    };
+    const onKey = (event) => { if (event.key === 'Escape') setColumnMenu(null); };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [columnMenu]);
+
+  function openColumnMenu(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    const menuWidth = 220;
+    const x = Math.min(event.clientX, window.innerWidth - menuWidth - 12);
+    setColumnMenu({ x, y: event.clientY });
+  }
+
+  function toggleColumn(key) {
+    setColumnVisibility((previous) => ({ ...previous, [key]: !previous[key] }));
+  }
+
+  const visibleColumns = COLUMN_DEFS.filter((c) => columnVisibility[c.key]);
+
+  function toggleSort(key) {
+    setPage(1);
+    setSort((current) => (current.by === key ? { by: key, dir: current.dir === 'asc' ? 'desc' : 'asc' } : { by: key, dir: 'asc' }));
+  }
 
   function toggleSelect(id) {
     setSelected((prev) => {
@@ -100,6 +170,7 @@ export function Devices() {
   function openPrintListModal() {
     if (selected.size === 0 && queue.length === 0) return;
     setError('');
+    setAddedNotice('');
     setPrintListSelection(new Set(selected));
     setLabelReviewOpen(selected.size === 0);
     setPrintListOpen(true);
@@ -130,6 +201,7 @@ export function Devices() {
 
   function commitReview(incoming) {
     setError('');
+    setAddedNotice(`Đã thêm ${incoming.length} thiết bị vào hàng đợi in.`);
     addDevices(incoming);
     setSelected((previous) => {
       const next = new Set(previous);
@@ -195,16 +267,19 @@ export function Devices() {
     setError('');
     try {
       // K\u00E9o to\u00E0n b\u1ED9 thi\u1EBFt b\u1ECB kh\u1EDBp b\u1ED9 l\u1ECDc hi\u1EC7n t\u1EA1i qua t\u1EEBng trang (kh\u00F4ng ch\u1EC9 trang \u0111ang xem),
-      // \u0111\u1EC3 export \u0111\u00FAng ngh\u0129a "to\u00E0n b\u1ED9 kho" k\u1EC3 c\u1EA3 khi c\u00F3 h\u00E0ng ngh\u00ECn thi\u1EBFt b\u1ECB.
-      const all = [];
-      let exportPage = 1;
-      let exportTotalPages = 1;
-      do {
-        const data = await api.get('/devices', { search, loai: loaiFilter, page: exportPage, pageSize: 100 });
-        all.push(...data.devices);
-        exportTotalPages = data.total_pages;
-        exportPage += 1;
-      } while (exportPage <= exportTotalPages);
+      // \u0111\u1EC3 export \u0111\u00FAng ngh\u0129a "to\u00E0n b\u1ED9 kho" k\u1EC3 c\u1EA3 khi c\u00F3 h\u00E0ng ngh\u00ECn thi\u1EBFt b\u1ECB. L\u1EA5y trang \u0111\u1EA7u \u0111\u1EC3 bi\u1EBFt
+      // t\u1ED5ng s\u1ED1 trang, r\u1ED3i t\u1EA3i c\u00E1c trang c\u00F2n l\u1EA1i song song (gi\u1EDBi h\u1EA1n s\u1ED1 l\u01B0\u1EE3t c\u00F9ng l\u00FAc) thay v\u00EC
+      // tu\u1EA7n t\u1EF1 t\u1EEBng trang m\u1ED9t \u2014 nhanh h\u01A1n nhi\u1EC1u l\u1EA7n khi d\u1EEF li\u1EC7u l\u1EDBn.
+      const CONCURRENCY = 6;
+      const first = await api.get('/devices', { search, loai: loaiFilter, page: 1, pageSize: 100 });
+      const pages = [first.devices];
+      const remaining = Array.from({ length: first.total_pages - 1 }, (_, i) => i + 2);
+      for (let i = 0; i < remaining.length; i += CONCURRENCY) {
+        const batch = remaining.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(batch.map((p) => api.get('/devices', { search, loai: loaiFilter, page: p, pageSize: 100 })));
+        results.forEach((data) => { pages[data.page - 1] = data.devices; });
+      }
+      const all = pages.flat();
 
       const headers = ['Serial Number', 'Model', 'Producer', 'Type', 'Device Name', 'User Name', 'Dept', 'IP Address', 'Comment', 'Date'];
       const rows = all.map((device) => [device.ma, device.model || '', device.producer || '', LOAI_LABELS[device.loai] || device.loai, device.ten, device.user_name || '', device.phong_ban || '', device.ip_address || '', device.ghi_chu || '', device.registered_at ? device.registered_at.slice(0, 10) : '']);
@@ -222,7 +297,7 @@ export function Devices() {
   }
 
   async function syncFromGlpi() {
-    if (!confirm('Đồng bộ máy tính và điện thoại từ GLPI vào WareHub? Thiết bị đã có (khớp Serial Number) sẽ được cập nhật, thiết bị mới sẽ được thêm vào (ở trạng thái chưa kích hoạt).')) return;
+    if (!confirm('Đồng bộ máy tính và điện thoại từ GLPI vào WareHub? Thiết bị đã có (khớp Serial Number) sẽ được cập nhật, thiết bị mới sẽ được thêm vào.')) return;
     setSyncingGlpi(true);
     setError('');
     try {
@@ -240,6 +315,46 @@ export function Devices() {
       setError(err.message);
     } finally {
       setSyncingGlpi(false);
+    }
+  }
+
+  async function createBulkHandovers() {
+    const chosen = devices.filter((d) => selected.has(d.id));
+    if (chosen.length === 0) return;
+    if (chosen.length > MAX_PRINT_BATCH) {
+      setError(`Chỉ được tạo tối đa ${MAX_PRINT_BATCH} phiếu trong một lượt. Bạn đang chọn ${chosen.length} thiết bị — vui lòng chia nhỏ ra nhiều lượt.`);
+      return;
+    }
+    if (!confirm(`Tạo và lưu ${chosen.length} phiếu bàn giao — mỗi thiết bị đã chọn 1 phiếu riêng, họ tên/bộ phận lấy theo thông tin thiết bị?`)) return;
+    setError('');
+    setBulkHandoverBusy(true);
+    try {
+      const created = [];
+      // Tạo tuần tự từng phiếu (không song song) để số phiếu YYMMxxx cấp ra đúng thứ tự liền mạch, không bị chen ngang.
+      for (const device of chosen) {
+        let base = buildHandoverData(device);
+        try {
+          const latest = await api.get('/handovers/latest', { device_id: device.id, model: device.model || '' });
+          if (latest.found && latest.data) base = mergeSpecs(base, latest.data, { overwrite: false });
+        } catch { /* không lấy được thông số cũ thì để trống, không chặn cả lượt tạo */ }
+        const { no: _no, ...payload } = base;
+        const result = await api.post('/handovers', { device_id: device.id, register_date: base.register_date, full_name: base.full_name, data: payload });
+        created.push({ ...payload, no: result.no });
+      }
+      setSelected(new Set());
+      flushSync(() => setBulkHandoverItems(created));
+      const cleanup = () => {
+        document.body.classList.remove('printing-handover');
+        window.removeEventListener('afterprint', cleanup);
+        setBulkHandoverItems(null);
+      };
+      document.body.classList.add('printing-handover');
+      window.addEventListener('afterprint', cleanup);
+      window.print();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBulkHandoverBusy(false);
     }
   }
 
@@ -262,7 +377,6 @@ export function Devices() {
       cpu: device.cpu || '',
       ram: device.ram || '',
       storage: device.storage || '',
-      is_active: Boolean(device.is_active),
       user_name: device.user_name || '',
       registered_at: device.registered_at ? device.registered_at.slice(0, 10) : '',
       phong_ban: device.phong_ban || '',
@@ -289,7 +403,6 @@ export function Devices() {
       user_name: device.user_name || '',
       phong_ban: device.phong_ban || '',
       ghi_chu: device.ghi_chu || '',
-      is_active: false,
       registered_at: device.registered_at ? device.registered_at.slice(0, 10) : '',
     });
     setFormError('');
@@ -319,25 +432,6 @@ export function Devices() {
     if (!confirm(`Xoá thiết bị "${device.ten}" (${device.ma})?`)) return;
     try {
       await api.del(`/devices/${device.id}`);
-      fetchDevices();
-    } catch (err) {
-      alert(err.message);
-    }
-  }
-
-  async function handleActivate(device) {
-    try {
-      await api.post(`/devices/${device.id}/activate`);
-      fetchDevices();
-    } catch (err) {
-      alert(err.message);
-    }
-  }
-  
-  async function handleActivateAndQueue(device) {
-    try {
-      await api.post(`/devices/${device.id}/activate`);
-      addDevices([{ ...device, is_active: true, lifecycle_status: 'old' }]);
       fetchDevices();
     } catch (err) {
       alert(err.message);
@@ -385,7 +479,12 @@ export function Devices() {
           <button className="btn-secondary" type="button" onClick={exportInventory} disabled={exporting}>{exporting ? 'Đang xuất...' : 'Export Inventory'}</button>
           {isAdmin && <button className="btn-secondary" type="button" onClick={syncFromGlpi} disabled={syncingGlpi}>{syncingGlpi ? 'Đang đồng bộ...' : 'Đồng bộ từ GLPI'}</button>}
           {isAdmin && <button className="btn-primary" type="button" onClick={openCreateModal}>Add New</button>}
-          <button className="btn-primary" type="button" onClick={openPrintListModal} disabled={selected.size === 0 && queue.length === 0}>Print Label List</button>
+          <button className="btn-secondary" type="button" onClick={createBulkHandovers} disabled={selected.size === 0 || bulkHandoverBusy}>
+            {bulkHandoverBusy ? 'Đang tạo phiếu...' : `Tạo phiếu bàn giao${selected.size > 0 ? ` (${selected.size})` : ''}`}
+          </button>
+          <button className="btn-primary" type="button" onClick={openPrintListModal} disabled={selected.size === 0 && queue.length === 0}>
+            Print Label List{queue.length > 0 ? ` (${queue.length})` : ''}
+          </button>
         </div>
       </div>
 
@@ -407,7 +506,7 @@ export function Devices() {
       <div className="inventory-table-wrap">
       <table className="data-table inventory-table">
         <thead>
-          <tr>
+          <tr onContextMenu={openColumnMenu} title="Bấm chuột phải để ẩn/hiện cột">
             <th>
               <input
                 type="checkbox"
@@ -416,24 +515,20 @@ export function Devices() {
               />
             </th>
             <th className="action-col">Action</th>
-            <th>Serial Number</th>
-            <th>Model</th>
-            <th>Producer</th>
-            <th>Type</th>
-            <th>Device Name</th>
-            <th>User Name</th>
-            <th>Dept</th>
-            <th>IP Address</th>
-            <th>Comment</th>
-            <th>Date</th>
+            {visibleColumns.map((c) => (
+              <th key={c.key} className="sortable-col" onClick={(event) => { event.stopPropagation(); toggleSort(c.key); }}>
+                {c.label}
+                <span className={`sort-arrow${sort.by === c.key ? ' active' : ''}`}>{sort.by === c.key ? (sort.dir === 'asc' ? '▲' : '▼') : '⇅'}</span>
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
           {loading && (
-            <tr><td colSpan={12} className="empty-row">Đang tải...</td></tr>
+            <tr><td colSpan={2 + visibleColumns.length} className="empty-row">Đang tải...</td></tr>
           )}
           {!loading && devices.length === 0 && (
-            <tr><td colSpan={12} className="empty-row">Chưa có thiết bị nào</td></tr>
+            <tr><td colSpan={2 + visibleColumns.length} className="empty-row">Chưa có thiết bị nào</td></tr>
           )}
           {devices.map((d) => (
             <tr key={d.id}>
@@ -442,7 +537,7 @@ export function Devices() {
               </td>
               <td className="action-col">
                 <div className="row-actions">
-                  {d.is_active && <button className="print-now-action" onClick={() => handlePrintNow(d)} disabled={printingId === d.id}>{printingId === d.id ? 'Đang in...' : 'In ngay'}</button>}
+                  <button className="print-now-action" onClick={() => handlePrintNow(d)} disabled={printingId === d.id}>{printingId === d.id ? 'Đang in...' : 'In ngay'}</button>
                   <button onClick={() => setHandoverDevice(d)}>Phiếu BG</button>
                   {isAdmin && <>
                   <button onClick={() => openEditModal(d)}>Sửa</button>
@@ -451,21 +546,25 @@ export function Devices() {
                   </>}
                 </div>
               </td>
-              <td className="mono">{d.ma}</td>
-              <td>{d.model || '—'}</td>
-              <td>{d.producer || '—'}</td>
-              <td>{LOAI_LABELS[d.loai]}</td>
-              <td>{d.ten}</td>
-              <td>{d.user_name || '—'}</td>
-              <td>{d.phong_ban || '—'}</td>
-              <td>{d.ip_address || '—'}</td>
-              <td>{d.ghi_chu || '—'}</td>
-              <td>{d.registered_at ? d.registered_at.slice(0, 10) : '—'}</td>
+              {visibleColumns.map((c) => <td key={c.key} className={c.className}>{c.cell(d)}</td>)}
             </tr>
           ))}
         </tbody>
       </table>
       </div>
+
+      {columnMenu && (
+        <div className="col-menu" ref={columnMenuRef} style={{ left: columnMenu.x, top: columnMenu.y }}>
+          <div className="col-menu-title">Hiện cột</div>
+          {COLUMN_DEFS.map((c) => (
+            <label className="col-menu-item" key={c.key}>
+              <input type="checkbox" checked={columnVisibility[c.key]} onChange={() => toggleColumn(c.key)} />
+              {c.label}
+            </label>
+          ))}
+          <button type="button" className="col-menu-reset" onClick={() => setColumnVisibility(Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, true])))}>Hiện tất cả</button>
+        </div>
+      )}
 
       <Pager page={page} pageSize={pageSize} total={total} totalPages={totalPages} unit="thiết bị" onPage={setPage} onPageSize={(size) => { setPage(1); setPageSize(size); }} />
 
@@ -506,6 +605,7 @@ export function Devices() {
               ) : (
                 <>
                   <h6 className="text-primary mb-3">Review</h6>
+                  {addedNotice && <div className="notice-box">{addedNotice}</div>}
                   {queue.length === 0 ? (
                     <div className="empty-state">Chưa có tem nào để in.</div>
                   ) : (
@@ -532,7 +632,7 @@ export function Devices() {
                 <>
                   <button type="button" className="btn-secondary btn-danger-hover" onClick={clearQueue} disabled={queue.length === 0}>Xóa hết</button>
                   <button type="button" className="btn-primary" onClick={handlePrintQueue} disabled={queue.length === 0 || queuePrinting}>
-                    {queuePrinting ? 'Đang in...' : 'Print'}
+                    {queuePrinting ? 'Đang in...' : `Print${queue.length > 0 ? ` (${queue.length})` : ''}`}
                   </button>
                 </>
               )}
@@ -579,6 +679,13 @@ export function Devices() {
       </div>
 
       {handoverDevice && <HandoverModal key={handoverDevice.id} device={handoverDevice} onClose={() => setHandoverDevice(null)} />}
+
+      {bulkHandoverItems && createPortal(
+        <div className="handover-print-root">
+          {bulkHandoverItems.map((data) => <HandoverSheet key={data.no} data={data} />)}
+        </div>,
+        document.body,
+      )}
 
       <PrintLabelModal
         device={instantPrintDevice}

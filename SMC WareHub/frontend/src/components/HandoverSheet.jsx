@@ -235,7 +235,7 @@ function readDraft(deviceId) {
 // Tiền tố năm+tháng của ngày lập, khớp đầu số phiếu (2609001 -> "2609").
 const monthPrefix = (isoDate) => (/^\d{4}-\d{2}/.test(isoDate || '') ? `${isoDate.slice(2, 4)}${isoDate.slice(5, 7)}` : '');
 
-function mergeSpecs(current, source, { overwrite }) {
+export function mergeSpecs(current, source, { overwrite }) {
   const next = { ...current };
   SPEC_FIELDS.forEach((key) => {
     const value = typeof source?.[key] === 'string' ? source[key].trim() : '';
@@ -455,7 +455,7 @@ export function HandoverModal({ device, saved, onClose }) {
           <div className="modal-actions modal-footer">
             {error
               ? <span className="hv-error">{error}</span>
-              : <span className="hv-note">{notice || 'Phần đang gõ dở được tự giữ lại. Bấm Lưu để ghi phiếu, In phiếu sẽ lưu rồi in.'}</span>}
+              : notice && <span className="hv-note">{notice}</span>}
             <button type="button" className="btn-secondary" onClick={() => setPickerOpen(true)} disabled={busy}>Clone từ phiếu khác</button>
             <button type="button" className="btn-secondary" onClick={handleClose}>Đóng</button>
             <button type="button" className="btn-secondary hv-save" onClick={handleSave} disabled={busy}>{busy ? 'Đang lưu...' : 'Lưu'}</button>
@@ -464,7 +464,7 @@ export function HandoverModal({ device, saved, onClose }) {
           {pickerOpen && <HandoverPicker initialSearch={device?.model || data.model} excludeNo={allocatedRef.current} onPick={handlePick} onCancel={() => setPickerOpen(false)} />}
         </div>
       </div>
-      {createPortal(<div id="handover-print"><HandoverSheet data={data} /></div>, document.body)}
+      {createPortal(<div className="handover-print-root"><HandoverSheet data={data} /></div>, document.body)}
     </>
   );
 }

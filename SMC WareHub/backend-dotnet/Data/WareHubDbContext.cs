@@ -42,7 +42,6 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
             entity.Property(x => x.IpAddress).HasMaxLength(45);
             entity.HasIndex(x => x.Loai);
             entity.HasIndex(x => x.LifecycleStatus);
-            entity.HasIndex(x => x.IsActive);
             entity.HasIndex(x => x.PhongBan);
         });
         modelBuilder.Entity<PrintHistory>(entity =>
