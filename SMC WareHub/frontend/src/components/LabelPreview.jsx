@@ -119,7 +119,7 @@ export function LabelPreview({ device, printMode = false }) {
     : 'N/A';
 
   return (
-    <div className={printMode ? 'print-page' : undefined}>
+    <div className={printMode ? `print-page print-page-${device.kho}` : undefined}>
       {device.kho === '24' ? (
         <DeviceLabelTable device={device} registeredText={registeredText} preview={!printMode} />
       ) : (

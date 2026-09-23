@@ -113,7 +113,7 @@ var devices = app.MapGroup("/api/devices").RequireAuthorization();
 devices.MapGet("/", async (string? search, string? loai, string? lifecycle_status, string? sortBy, string? sortDir, int? page, int? pageSize, WareHubDbContext db) =>
 {
     var query = db.Devices.AsNoTracking().AsQueryable();
-    if (!string.IsNullOrWhiteSpace(search)) query = query.Where(x => x.Ma.Contains(search) || x.Ten.Contains(search) || (x.PhongBan ?? "").Contains(search));
+    if (!string.IsNullOrWhiteSpace(search)) query = query.Where(x => x.Ma.Contains(search) || x.Ten.Contains(search) || (x.PhongBan ?? "").Contains(search) || (x.UserName ?? "").Contains(search) || (x.IpAddress ?? "").Contains(search));
     if (!string.IsNullOrWhiteSpace(loai)) query = query.Where(x => x.Loai == loai);
     if (!string.IsNullOrWhiteSpace(lifecycle_status)) query = query.Where(x => x.LifecycleStatus == lifecycle_status);
     var descending = sortDir == "desc";

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { HandoverModal, HandoverSheet, buildHandoverData } from '../components/HandoverSheet';
+import { HandoverModal, HandoverSheet, AttachmentSheet, buildHandoverData } from '../components/HandoverSheet';
 import { Pager } from '../components/Pager';
+import { setPrintPageSize, HANDOVER_PAGE_CSS } from '../utils/printPageSize';
 
 function formatDateTime(value) {
   if (!value) return '—';
@@ -85,6 +86,7 @@ export function Handovers() {
     };
     document.body.classList.add('printing-handover');
     window.addEventListener('afterprint', cleanup);
+    setPrintPageSize(HANDOVER_PAGE_CSS);
     window.print();
   }
 
@@ -164,7 +166,15 @@ export function Handovers() {
 
       {printItems && createPortal(
         <div className="handover-print-root">
-          {printItems.map((item) => <HandoverSheet key={item.no} data={{ ...buildHandoverData({}), ...(item.data || {}), no: item.no }} />)}
+          {printItems.map((item) => {
+            const sheetData = { ...buildHandoverData({}), ...(item.data || {}), no: item.no };
+            return (
+              <Fragment key={item.no}>
+                <HandoverSheet data={sheetData} />
+                {(sheetData.attachments || []).length > 0 && <AttachmentSheet data={sheetData} />}
+              </Fragment>
+            );
+          })}
         </div>,
         document.body,
       )}

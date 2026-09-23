@@ -627,11 +627,20 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
 }
 
 @media print {
-  body * { visibility: hidden; }
-  #print-area, #print-area * { visibility: visible; }
-  #print-area { display: block; position: absolute; left: 0; top: 0; margin: 0; }
+  /* display: none (không phải visibility: hidden) — nếu chỉ ẩn mà vẫn giữ chỗ, toàn bộ nội dung trang
+     Thiết bị (bảng, sidebar...) tuy vô hình nhưng vẫn chiếm chỗ, bị chia dư ra rất nhiều trang trống
+     trước khi tới được tem thật, nhất là với khổ trang nhỏ như tem (12mm/60x24mm). */
+  body.printing-labels #root { display: none !important; }
+  body.printing-labels #print-area { display: block !important; position: absolute; left: 0; top: 0; margin: 0; }
   .print-page { page-break-after: always; display: flex; align-items: center; }
   .print-page:last-child { page-break-after: auto; }
+  .print-page-24 .device-label-table { width: 60mm; height: 24mm; table-layout: fixed; }
+  .print-page-24 .device-label-table td { padding: 0 .8mm; font-size: 6.3px; line-height: 1.15; }
+  .print-page-24 .preview-logo-cell { width: 22%; padding: .3mm; }
+  .print-page-24 .preview-logo-cell img { width: 100%; height: 4.5mm; }
+  .print-page-24 .preview-field { width: 27%; font-size: 5.6px; }
+  .print-page-24 .preview-value { width: 51%; }
+  .print-page-24 td.preview-qr-cell { height: auto; padding: .4mm; }
 }
 
 /* ==========================================================================
@@ -657,7 +666,12 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
 .hv-band { border: .35mm solid #000; border-bottom: 0; margin-top: 2.5mm; text-align: center; font: 700 9.5pt 'Times New Roman', Times, serif; padding: .8mm 0; }
 .hv-band-gap { margin-top: 3mm; }
 .hv-details th { background: #fff; }
-.hv-details td { height: 5.2mm; padding-top: .4mm; padding-bottom: .4mm; }
+/* Dùng chiều cao cố định trên chính <tr> (không co giãn theo flex) — bảng này có 2 dòng gộp ô dọc
+   (LICENSE, OTHER EQUIPMENT), nếu để co giãn lấp trang thì trình duyệt chia phần dư không đều: dòng
+   đơn cao hơn hẳn dòng nằm trong nhóm gộp. Cố định từng dòng bằng nhau, để 3 khối còn lại tự lấp trống. */
+.hv-details { flex: 0 0 auto; }
+.hv-details tr { height: 5.6mm; }
+.hv-details th, .hv-details td { padding-top: .4mm; padding-bottom: .4mm; }
 .hv-sub { font-family: Arial, Helvetica, sans-serif; }
 .hv-policy th { font-size: 9pt; }
 .hv-policy td { padding: 1mm 1.6mm; font-size: 8.4pt; }
@@ -666,7 +680,7 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
 .hv-policy li::before { content: '♦'; position: absolute; left: 0; font-size: 6.5pt; top: .35mm; }
 .hv-signs { display: grid; grid-template-columns: 1fr 1fr; gap: 6mm; margin-top: 4mm; flex: 1 1 auto; }
 .hv-signs table { height: 100%; }
-.hv-info, .hv-details, .hv-policy { flex: 1 1 auto; }
+.hv-info, .hv-policy { flex: 1 1 auto; }
 .hv-signs table { border: 0; }
 .hv-sign-title { font: 700 10pt 'Times New Roman', Times, serif; letter-spacing: .3px; }
 .hv-signs thead th { font: 400 8.6pt 'Times New Roman', Times, serif; }
@@ -686,7 +700,7 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
 .hv-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
 .hv-fields label { display: block; margin: 8px 0 0; font-size: 11.5px; }
 .hv-fields input { width: 100%; box-sizing: border-box; margin-top: 3px; }
-.hv-preview { background: #e9edf3; border-radius: var(--radius-sm); padding: 14px; display: flex; justify-content: center; }
+.hv-preview { background: #e9edf3; border-radius: var(--radius-sm); padding: 14px; display: flex; flex-direction: column; align-items: center; gap: 14px; }
 .hv-preview .hv-sheet { zoom: .72; box-shadow: 0 2px 14px rgba(0, 0, 0, .22); padding: 8mm; width: 210mm; min-height: 297mm; }
 @media (max-width: 900px) {
   .hv-modal-body { grid-template-columns: 1fr; overflow: auto; }
@@ -695,12 +709,13 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
 }
 
 .handover-print-root { display: none; }
-@page handover { size: A4 portrait; margin: 8mm; }
 @media print {
   body.printing-handover #root { display: none !important; }
-  body.printing-handover .handover-print-root { display: block !important; visibility: visible; page: handover; }
+  body.printing-handover .handover-print-root { display: block !important; visibility: visible; }
   body.printing-handover .handover-print-root * { visibility: visible; }
-  body.printing-handover .handover-print-root .hv-sheet { zoom: 1; box-shadow: none; padding: 0; min-height: 0; height: 279mm; }
+  /* Cao 268mm thay vì tối đa 281mm (297 - 2*8mm lề) — chừa dư khoảng 13mm để phòng khi trình duyệt
+     bật "Headers and footers" (chiếm thêm chỗ ngoài phần lề CSS khai báo), tránh bị tràn thêm 1 trang gần như trắng. */
+  body.printing-handover .handover-print-root .hv-sheet { zoom: 1; box-shadow: none; padding: 0; min-height: 0; height: 268mm; }
 }
 .hv-no-field input { background: var(--panel-soft); color: var(--ink-soft); font-weight: 700; letter-spacing: .5px; }
 .hv-hint { display: block; margin-top: 3px; color: var(--muted); font-size: 10.5px; line-height: 1.3; }
@@ -741,3 +756,23 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
 .sortable-col:hover { color: var(--primary); }
 .sort-arrow { margin-left: 5px; font-size: 10px; color: var(--muted); }
 .sort-arrow.active { color: var(--primary); }
+
+.hv-other-field { position: relative; }
+.hv-monitor-btn { position: absolute; right: 0; top: 0; border: 0; background: transparent; color: var(--primary); font-size: 11px; font-weight: 600; cursor: pointer; padding: 0; }
+.hv-monitor-btn:hover { text-decoration: underline; }
+
+.hv-attach-help { margin: 0 0 8px; color: var(--ink-soft); font-size: 11.5px; line-height: 1.4; }
+.hv-attach-list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.hv-attach-list li { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 12px; background: var(--panel-soft); }
+.hv-attach-list li span:first-child { font-weight: 700; color: var(--primary); }
+.hv-attach-list li span:nth-child(2) { flex: 1; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hv-attach-list li button { border: 0; background: transparent; color: var(--danger); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; }
+
+/* Trang "Danh sách thiết bị đính kèm" — in ngay sau phiếu chính, cùng khổ A4/phong cách bảng viền đen. */
+.hv-attach-sheet { justify-content: flex-start; }
+.hv-attach-table { margin-top: 4mm; }
+.hv-attach-table th, .hv-attach-table td { border: .35mm solid #000; padding: 1.3mm 1.8mm; font-size: 9pt; }
+.hv-attach-table th { font: 700 9pt 'Times New Roman', Times, serif; background: #fff; }
+.hv-attach-table td { font-family: Arial, Helvetica, sans-serif; }
+.hv-attach-table td.mono { font-family: 'Courier New', Courier, monospace; letter-spacing: .2px; }
+.hv-attach-table tbody tr:nth-child(even) td { background: #f7f9fc; }

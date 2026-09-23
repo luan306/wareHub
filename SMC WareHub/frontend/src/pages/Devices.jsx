@@ -6,6 +6,7 @@ import { usePrintQueue } from '../context/PrintQueueContext';
 import { LabelPreview, PrintLabelModal } from '../components/LabelPreview';
 import { HandoverModal, HandoverSheet, buildHandoverData, mergeSpecs } from '../components/HandoverSheet';
 import { Pager } from '../components/Pager';
+import { setPrintPageSize, labelPageCss, HANDOVER_PAGE_CSS, printWithBodyClass } from '../utils/printPageSize';
 
 const LOAI_LABELS = {
   laptop: 'Laptop',
@@ -252,7 +253,8 @@ export function Devices() {
     setQueuePrinting(true);
     try {
       await api.post('/print', { deviceIds: queue.map((device) => device.id) });
-      window.print();
+      setPrintPageSize(labelPageCss(queue[0]?.kho));
+      printWithBodyClass('printing-labels');
       clearQueue();
       closePrintListModal();
     } catch (err) {
@@ -350,6 +352,7 @@ export function Devices() {
       };
       document.body.classList.add('printing-handover');
       window.addEventListener('afterprint', cleanup);
+      setPrintPageSize(HANDOVER_PAGE_CSS);
       window.print();
     } catch (err) {
       setError(err.message);
@@ -463,7 +466,8 @@ export function Devices() {
       setInstantPrintDevice((device) => ({ ...device, registered_at: date }));
     }
     setTimeout(() => {
-      window.print();
+      setPrintPageSize(labelPageCss(instantPrintDevice?.kho));
+      printWithBodyClass('printing-labels');
       setInstantPrintDevice(null);
     }, 80);
     if (date) {
@@ -490,7 +494,7 @@ export function Devices() {
 
       <div className="toolbar">
         <input
-          placeholder="Tìm theo mã, tên, phòng ban..."
+          placeholder="Tìm theo serial, tên máy, phòng ban, user, IP..."
           value={search}
           onChange={(e) => { setPage(1); setSearch(e.target.value); }}
         />
@@ -670,13 +674,16 @@ export function Devices() {
         </div>
       )}
 
-      <div id="print-area">
-        {instantPrintDevice ? (
-          <LabelPreview device={instantPrintDevice} printMode />
-        ) : (
-          queue.map((device) => <LabelPreview key={device.id} device={device} printMode />)
-        )}
-      </div>
+      {createPortal(
+        <div id="print-area">
+          {instantPrintDevice ? (
+            <LabelPreview device={instantPrintDevice} printMode />
+          ) : (
+            queue.map((device) => <LabelPreview key={device.id} device={device} printMode />)
+          )}
+        </div>,
+        document.body,
+      )}
 
       {handoverDevice && <HandoverModal key={handoverDevice.id} device={handoverDevice} onClose={() => setHandoverDevice(null)} />}
 
