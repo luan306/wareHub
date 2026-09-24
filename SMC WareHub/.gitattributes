@@ -1,0 +1,6 @@
+# File chạy trên máy chủ Linux / trong container phải giữ xuống dòng LF (CRLF làm script bash và cấu hình nginx lỗi).
+*.sh text eol=lf
+deploy/** text eol=lf
+frontend/nginx.conf text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf

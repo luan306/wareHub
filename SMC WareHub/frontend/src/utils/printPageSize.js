@@ -17,18 +17,25 @@ export function setPrintPageSize(css) {
 export const HANDOVER_PAGE_CSS = 'size: A4 portrait; margin: 8mm;';
 
 export function labelPageCss(kho) {
-  return kho === '24' ? 'size: 60mm 24mm; margin: 0;' : 'size: 12mm 12mm; margin: 0;';
+  return kho === '24' ? 'size: 60mm 24mm; margin: 0;' : 'size: 30mm 12mm; margin: 0;';
 }
 
 // In kèm theo 1 class tạm trên <body> (gỡ ngay sau khi hộp thoại in đóng lại) — CSS dựa vào class này
 // để ẩn hẳn (display: none) phần còn lại của trang thay vì chỉ visibility: hidden, tránh phần nội dung
 // tuy vô hình nhưng vẫn chiếm chỗ khiến máy in tự chia dư ra rất nhiều trang trống khi khổ trang nhỏ.
-export function printWithBodyClass(className) {
+export function printWithBodyClass(className, onDone) {
   const cleanup = () => {
     document.body.classList.remove(className);
     window.removeEventListener('afterprint', cleanup);
+    onDone?.();
   };
   document.body.classList.add(className);
   window.addEventListener('afterprint', cleanup);
   window.print();
+}
+
+// In các phiếu bàn giao (A4): đặt khổ giấy rồi in; onDone chạy sau khi hộp thoại in đóng lại.
+export function printHandoverSheets(onDone) {
+  setPrintPageSize(HANDOVER_PAGE_CSS);
+  printWithBodyClass('printing-handover', onDone);
 }

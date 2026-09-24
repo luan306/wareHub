@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Linq.Expressions;
+using System.Reflection;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
@@ -26,13 +27,18 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
 });
 builder.Services.AddResponseCompression(options => options.EnableForHttps = true);
+// Dò phiên bản MySQL đúng 1 lần: lambda cấu hình bên dưới chạy lại cho MỖI DbContext (tức mỗi yêu cầu), nếu để
+// AutoDetect ngay trong đó thì mỗi yêu cầu sẽ mở thêm 1 kết nối MySQL chỉ để hỏi số phiên bản (làm chậm cả chục lần).
+// PublicationOnly: nếu MySQL chưa sẵn sàng thì lần dò này lỗi nhưng KHÔNG bị nhớ lỗi, lần sau dò lại.
+var mysqlVersion = new Lazy<ServerVersion>(() => ServerVersion.AutoDetect(connectionString), LazyThreadSafetyMode.PublicationOnly);
 builder.Services.AddDbContext<WareHubDbContext>(options =>
-    options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString), mysql =>
+    options.UseMySql(connectionString, mysqlVersion.Value, mysql =>
         mysql.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(10), errorNumbersToAdd: null)
              .CommandTimeout(30)));
 builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
 builder.Services.Configure<GlpiOptions>(configuration.GetSection(GlpiOptions.SectionName));
 builder.Services.AddHttpClient<GlpiClient>();
+builder.Services.AddSingleton<MaintenanceState>();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
 {
     options.TokenValidationParameters = new TokenValidationParameters
@@ -70,6 +76,22 @@ app.Use(async (context, next) =>
 });
 app.UseCors();
 app.UseAuthentication();
+// Chế độ bảo trì: chặn mọi API với 503 (giao diện web đọc mã này để hiện màn hình "đang bảo trì"), trừ admin và các
+// đường cần thiết để bật/tắt/kiểm tra (health, trạng thái bảo trì, đăng nhập). Đặt TRƯỚC bước tra cứu người dùng
+// trong DB nên vẫn hoạt động khi đang thao tác trên cơ sở dữ liệu.
+var maintenance = app.Services.GetRequiredService<MaintenanceState>();
+app.Use(async (context, next) =>
+{
+    var info = maintenance.Current;
+    if (info.Enabled && context.Request.Path.StartsWithSegments("/api") && !IsMaintenanceExempt(context.Request) && !context.User.IsInRole("admin"))
+    {
+        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        context.Response.Headers.RetryAfter = "60";
+        await context.Response.WriteAsJsonAsync(new { error = info.Message, maintenance = true, until = info.Until });
+        return;
+    }
+    await next();
+});
 app.Use(async (context, next) =>
 {
     if (context.User.Identity?.IsAuthenticated == true)
@@ -94,7 +116,22 @@ app.UseAuthorization();
 
 await InitializeDatabaseAsync(app.Services, configuration);
 
-app.MapGet("/api/health", () => Results.Ok(new { ok = true }));
+// version đổi sau mỗi lần build lại: trình duyệt so sánh để biết máy chủ vừa được cập nhật và tự tải lại trang.
+var buildId = File.GetLastWriteTimeUtc(Assembly.GetEntryAssembly()!.Location).ToString("yyyyMMddHHmmss");
+app.MapGet("/api/health", () => Results.Ok(new { ok = true, version = buildId, maintenance = maintenance.Current.Enabled }));
+// Sẵn sàng phục vụ: khác /api/health (chỉ cho biết tiến trình đang chạy), điểm này còn thử kết nối cơ sở dữ liệu.
+// Script triển khai blue-green chỉ chuyển lưu lượng sang bản mới sau khi điểm này trả 200.
+app.MapGet("/api/ready", async (WareHubDbContext db, CancellationToken cancellationToken) =>
+    await db.Database.CanConnectAsync(cancellationToken)
+        ? Results.Ok(new { ready = true, version = buildId })
+        : Results.Json(new { ready = false, version = buildId }, statusCode: StatusCodes.Status503ServiceUnavailable));
+app.MapGet("/api/maintenance", () => Results.Ok(maintenance.Current));
+app.MapPut("/api/maintenance", (MaintenanceRequest request) =>
+{
+    if (request.Message is { Length: > 300 }) return Results.BadRequest(new { error = "Nội dung thông báo bảo trì không được vượt quá 300 ký tự" });
+    maintenance.Set(request.Enabled, request.Message, request.Until);
+    return Results.Ok(maintenance.Current);
+}).RequireAuthorization("admin");
 
 var auth = app.MapGroup("/api/auth");
 auth.MapPost("/login", async (LoginRequest request, WareHubDbContext db, IPasswordHasher<User> hasher, IConfiguration config) =>
@@ -105,6 +142,9 @@ auth.MapPost("/login", async (LoginRequest request, WareHubDbContext db, IPasswo
     var user = await db.Users.SingleOrDefaultAsync(x => x.Username == username);
     if (user is null || !user.IsActive || !VerifyPassword(user, request.Password, hasher))
         return Results.Json(new { error = "Sai tên đăng nhập hoặc mật khẩu" }, statusCode: StatusCodes.Status401Unauthorized);
+    // Đang bảo trì: chỉ admin được vào (để tắt bảo trì); người khác nhận 503 để giao diện hiện màn hình bảo trì.
+    if (maintenance.Current is { Enabled: true } info && user.Role != "admin")
+        return Results.Json(new { error = info.Message, maintenance = true, until = info.Until }, statusCode: StatusCodes.Status503ServiceUnavailable);
     return Results.Ok(new { token = CreateToken(user, config), user = UserDto(user) });
 });
 auth.MapGet("/me", (HttpContext context) => Results.Ok(new { user = UserDto((User)context.Items["CurrentUser"]!) })).RequireAuthorization();
@@ -134,11 +174,10 @@ devices.MapGet("/", async (string? search, string? loai, string? lifecycle_statu
     };
     query = descending ? query.OrderByDescending(keySelector) : query.OrderBy(keySelector);
     if (sortBy is not null) query = ((IOrderedQueryable<Device>)query).ThenByDescending(x => x.CreatedAt); // phá thế bằng nhau (vd nhiều thiết bị cùng trống 1 cột) theo thứ tự ổn định
-    var currentPage = Math.Max(page ?? 1, 1);
-    var limit = Math.Clamp(pageSize ?? 24, 1, 100);
+    var (currentPage, limit) = ParsePaging(page, pageSize, defaultSize: 24);
     var total = await query.CountAsync();
     var rows = await query.Skip((currentPage - 1) * limit).Take(limit).ToListAsync();
-    return Results.Ok(new { devices = rows, total, page = currentPage, pageSize = limit, totalPages = Math.Max((int)Math.Ceiling(total / (double)limit), 1) });
+    return Results.Ok(new { devices = rows, total, page = currentPage, pageSize = limit, totalPages = TotalPages(total, limit) });
 });
 devices.MapGet("/{id:int}", async (int id, WareHubDbContext db) =>
 {
@@ -162,9 +201,7 @@ devices.MapPut("/{id:int}", async (int id, DeviceRequest request, HttpContext co
     CopyDevice(existing, request);
     var after = SnapshotDevice(existing);
     var currentUser = (User)context.Items["CurrentUser"]!;
-    var changes = DiffDevice(before, after);
-    if (changes.Count > 0)
-        db.DeviceHistory.AddRange(changes.Select(c => new DeviceHistory { DeviceId = id, UserId = currentUser.Id, FieldName = c.Field, OldValue = c.OldValue, NewValue = c.NewValue }));
+    RecordDeviceChanges(db, id, currentUser.Id, DiffDevice(before, after));
     await db.SaveChangesAsync();
     return Results.Ok(new { ok = true });
 }).RequireAuthorization("admin");
@@ -235,12 +272,8 @@ devices.MapPost("/glpi-sync", async (HttpContext context, WareHubDbContext db, G
             existing.GhiChu = Truncate(c.Comment, 500);
             var after = SnapshotDevice(existing);
             var changes = DiffDevice(before, after);
-            if (changes.Count > 0)
-            {
-                db.DeviceHistory.AddRange(changes.Select(ch => new DeviceHistory { DeviceId = existing.Id, UserId = currentUser.Id, FieldName = ch.Field, OldValue = ch.OldValue, NewValue = ch.NewValue }));
-                updated++;
-            }
-            else unchanged++;
+            RecordDeviceChanges(db, existing.Id, currentUser.Id, changes);
+            if (changes.Count > 0) updated++; else unchanged++;
         }
         else
         {
@@ -387,8 +420,7 @@ handovers.MapGet("/", async (string? search, int? page, int? pageSize, WareHubDb
         var term = search.Trim();
         query = query.Where(x => x.No.Contains(term) || (x.FullName ?? "").Contains(term) || (x.DeviceMa ?? "").Contains(term) || (x.Payload ?? "").Contains(term));
     }
-    var currentPage = Math.Max(page ?? 1, 1);
-    var limit = Math.Clamp(pageSize ?? 30, 1, 100);
+    var (currentPage, limit) = ParsePaging(page, pageSize, defaultSize: 30);
     var total = await query.CountAsync();
     var rows = await query.OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id).Skip((currentPage - 1) * limit).Take(limit).ToListAsync();
     var userIds = rows.Select(x => x.UserId).Distinct().ToList();
@@ -399,7 +431,7 @@ handovers.MapGet("/", async (string? search, int? page, int? pageSize, WareHubDb
         PrintedBy = userNames.GetValueOrDefault(x.UserId),
         Data = x.Payload is null ? (JsonElement?)null : JsonSerializer.Deserialize<JsonElement>(x.Payload),
     });
-    return Results.Ok(new { handovers = items, total, page = currentPage, pageSize = limit, totalPages = Math.Max((int)Math.Ceiling(total / (double)limit), 1) });
+    return Results.Ok(new { handovers = items, total, page = currentPage, pageSize = limit, totalPages = TotalPages(total, limit) });
 });
 handovers.MapDelete("/{no}", async (string no, WareHubDbContext db) =>
 {
@@ -419,6 +451,12 @@ qr.MapGet("/devices/{deviceId:int}", async (int deviceId, int? size, WareHubDbCo
 });
 
 app.Run();
+
+static bool IsMaintenanceExempt(HttpRequest request) =>
+    request.Path.Equals("/api/health", StringComparison.OrdinalIgnoreCase)
+    || request.Path.Equals("/api/ready", StringComparison.OrdinalIgnoreCase)
+    || (HttpMethods.IsGet(request.Method) && request.Path.Equals("/api/maintenance", StringComparison.OrdinalIgnoreCase))
+    || (HttpMethods.IsPost(request.Method) && request.Path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase));
 
 static string? ValidateDevice(DeviceRequest request)
 {
@@ -460,6 +498,12 @@ static Dictionary<string, string?> SnapshotDevice(Device device) => new()
 };
 static List<(string Field, string? OldValue, string? NewValue)> DiffDevice(Dictionary<string, string?> before, Dictionary<string, string?> after) =>
     before.Where(entry => entry.Value != after[entry.Key]).Select(entry => (entry.Key, entry.Value, after[entry.Key])).ToList();
+// Ghi lại từng trường thiết bị đã đổi (không làm gì nếu không có thay đổi); người gọi tự SaveChanges.
+static void RecordDeviceChanges(WareHubDbContext db, int deviceId, int userId, List<(string Field, string? OldValue, string? NewValue)> changes) =>
+    db.DeviceHistory.AddRange(changes.Select(c => new DeviceHistory { DeviceId = deviceId, UserId = userId, FieldName = c.Field, OldValue = c.OldValue, NewValue = c.NewValue }));
+// Phân trang dùng chung: trang tối thiểu 1, số dòng mỗi trang trong khoảng 1..100.
+static (int Page, int Limit) ParsePaging(int? page, int? pageSize, int defaultSize) => (Math.Max(page ?? 1, 1), Math.Clamp(pageSize ?? defaultSize, 1, 100));
+static int TotalPages(int total, int limit) => Math.Max((int)Math.Ceiling(total / (double)limit), 1);
 // Nội dung phiếu là JSON do trang web gửi lên; chỉ nhận object và giới hạn dung lượng để không nhét rác vào DB.
 static string? HandoverPayload(JsonElement? data) =>
     data is { ValueKind: JsonValueKind.Object } value && value.GetRawText().Length <= 16_000 ? value.GetRawText() : null;
@@ -479,15 +523,95 @@ static bool VerifyPassword(User user, string password, IPasswordHasher<User> has
         return BCrypt.Net.BCrypt.Verify(password, user.PasswordHash);
     return hasher.VerifyHashedPassword(user, user.PasswordHash, password) != PasswordVerificationResult.Failed;
 }
-static string CreateToken(User user, IConfiguration config) { var claims = new[] { new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()), new Claim(JwtRegisteredClaimNames.UniqueName, user.Username), new Claim(ClaimTypes.Role, user.Role), new Claim("full_name", user.FullName) }; var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["Jwt:Secret"]!)); var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256); var expires = DateTime.UtcNow.AddHours(config.GetValue("Jwt:ExpiresInHours", 8)); return new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(claims: claims, expires: expires, signingCredentials: credentials)); }
-static async Task InitializeDatabaseAsync(IServiceProvider services, IConfiguration configuration) { await using var scope = services.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<WareHubDbContext>(); for (var attempt = 1; attempt <= 20; attempt++) { try { await db.Database.EnsureCreatedAsync(); await EnsureDeviceColumnAsync(db, "producer"); await EnsureDeviceColumnAsync(db, "ip_address"); await EnsureIndexAsync(db, "devices", "IX_devices_Loai", "`Loai`"); await EnsureIndexAsync(db, "devices", "IX_devices_LifecycleStatus", "`lifecycle_status`"); await EnsureIndexAsync(db, "devices", "IX_devices_PhongBan", "`phong_ban`"); await EnsureIndexAsync(db, "print_history", "IX_print_history_PrintedAt", "`printed_at`"); await EnsureDeviceHistoryTableAsync(db); await EnsureHandoverTableAsync(db); await EnsureIndexAsync(db, "handovers", "IX_handovers_CreatedAt", "`created_at`");
-        // Chỉ mục thừa/không còn dùng — idx_devices_loai và idx_devices_phong_ban trùng cột với IX_devices_Loai/IX_devices_PhongBan ở trên (tạo ra ngoài code trước đây);
-        // IX_devices_IsActive vô dụng từ khi mọi thiết bị luôn is_active = true (không còn giá trị nào khác để lọc). Giữ lại chỉ khiến mỗi lần ghi thiết bị chậm hơn, không giúp gì cho truy vấn.
-        await EnsureIndexDroppedAsync(db, "devices", "idx_devices_loai"); await EnsureIndexDroppedAsync(db, "devices", "idx_devices_phong_ban"); await EnsureIndexDroppedAsync(db, "devices", "IX_devices_IsActive"); if (!await db.Users.AnyAsync()) { var user = new User { Username = configuration["DefaultAdmin:User"] ?? "admin", FullName = configuration["DefaultAdmin:FullName"] ?? "Quản trị viên", Role = "admin" }; var password = configuration["DefaultAdmin:Password"] ?? throw new InvalidOperationException("Thiếu DefaultAdmin:Password"); user.PasswordHash = scope.ServiceProvider.GetRequiredService<IPasswordHasher<User>>().HashPassword(user, password); db.Users.Add(user); await db.SaveChangesAsync(); } return; } catch when (attempt < 20) { await Task.Delay(2000); } } }
-static async Task EnsureDeviceColumnAsync(WareHubDbContext db, string columnName) { var exists = await db.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS `Value` FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'devices' AND column_name = {0}", columnName).SingleAsync(); if (exists == 0) { var sql = columnName switch { "producer" => "ALTER TABLE devices ADD COLUMN producer VARCHAR(100) NULL", "ip_address" => "ALTER TABLE devices ADD COLUMN ip_address VARCHAR(45) NULL", _ => throw new InvalidOperationException("Cột thiết bị không hợp lệ") }; await db.Database.ExecuteSqlRawAsync(sql); } }
-#pragma warning disable EF1002 // table/indexName/columnExpression are always hardcoded call-site literals from InitializeDatabaseAsync above, never user input
-static async Task EnsureIndexAsync(WareHubDbContext db, string table, string indexName, string columnExpression) { var exists = await db.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS `Value` FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = {0} AND index_name = {1}", table, indexName).SingleAsync(); if (exists == 0) await db.Database.ExecuteSqlRawAsync($"CREATE INDEX `{indexName}` ON `{table}` ({columnExpression})"); }
-static async Task EnsureIndexDroppedAsync(WareHubDbContext db, string table, string indexName) { var exists = await db.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS `Value` FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = {0} AND index_name = {1}", table, indexName).SingleAsync(); if (exists > 0) await db.Database.ExecuteSqlRawAsync($"DROP INDEX `{indexName}` ON `{table}`"); }
+static string CreateToken(User user, IConfiguration config)
+{
+    var claims = new[]
+    {
+        new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
+        new Claim(JwtRegisteredClaimNames.UniqueName, user.Username),
+        new Claim(ClaimTypes.Role, user.Role),
+        new Claim("full_name", user.FullName),
+    };
+    var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["Jwt:Secret"]!));
+    var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+    var expires = DateTime.UtcNow.AddHours(config.GetValue("Jwt:ExpiresInHours", 8));
+    return new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(claims: claims, expires: expires, signingCredentials: credentials));
+}
+// Chờ MySQL sẵn sàng (tối đa 20 lần, cách nhau 2 giây) rồi tạo/bổ sung schema và tài khoản admin mặc định.
+static async Task InitializeDatabaseAsync(IServiceProvider services, IConfiguration configuration)
+{
+    await using var scope = services.CreateAsyncScope();
+    var db = scope.ServiceProvider.GetRequiredService<WareHubDbContext>();
+    for (var attempt = 1; attempt <= 20; attempt++)
+    {
+        try
+        {
+            await EnsureSchemaAsync(db);
+            await SeedDefaultAdminAsync(db, scope.ServiceProvider, configuration);
+            return;
+        }
+        catch when (attempt < 20)
+        {
+            await Task.Delay(2000);
+        }
+    }
+}
+static async Task EnsureSchemaAsync(WareHubDbContext db)
+{
+    await db.Database.EnsureCreatedAsync();
+    await EnsureDeviceColumnAsync(db, "producer");
+    await EnsureDeviceColumnAsync(db, "ip_address");
+    await EnsureIndexAsync(db, "devices", "IX_devices_Loai", "`Loai`");
+    await EnsureIndexAsync(db, "devices", "IX_devices_LifecycleStatus", "`lifecycle_status`");
+    await EnsureIndexAsync(db, "devices", "IX_devices_PhongBan", "`phong_ban`");
+    await EnsureIndexAsync(db, "print_history", "IX_print_history_PrintedAt", "`printed_at`");
+    await EnsureDeviceHistoryTableAsync(db);
+    await EnsureHandoverTableAsync(db);
+    await EnsureIndexAsync(db, "handovers", "IX_handovers_CreatedAt", "`created_at`");
+    // Chỉ mục thừa/không còn dùng — idx_devices_loai và idx_devices_phong_ban trùng cột với IX_devices_Loai/IX_devices_PhongBan ở trên (tạo ra ngoài code trước đây);
+    // IX_devices_IsActive vô dụng từ khi mọi thiết bị luôn is_active = true (không còn giá trị nào khác để lọc). Giữ lại chỉ khiến mỗi lần ghi thiết bị chậm hơn, không giúp gì cho truy vấn.
+    await EnsureIndexDroppedAsync(db, "devices", "idx_devices_loai");
+    await EnsureIndexDroppedAsync(db, "devices", "idx_devices_phong_ban");
+    await EnsureIndexDroppedAsync(db, "devices", "IX_devices_IsActive");
+}
+static async Task SeedDefaultAdminAsync(WareHubDbContext db, IServiceProvider services, IConfiguration configuration)
+{
+    if (await db.Users.AnyAsync()) return;
+    var user = new User { Username = configuration["DefaultAdmin:User"] ?? "admin", FullName = configuration["DefaultAdmin:FullName"] ?? "Quản trị viên", Role = "admin" };
+    var password = configuration["DefaultAdmin:Password"] ?? throw new InvalidOperationException("Thiếu DefaultAdmin:Password");
+    user.PasswordHash = services.GetRequiredService<IPasswordHasher<User>>().HashPassword(user, password);
+    db.Users.Add(user);
+    await db.SaveChangesAsync();
+}
+// Các câu kiểm tra schema dùng chung cho các hàm Ensure* bên dưới.
+static async Task<bool> ColumnExistsAsync(WareHubDbContext db, string table, string column) =>
+    await db.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS `Value` FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = {0} AND column_name = {1}", table, column).SingleAsync() > 0;
+static async Task<bool> TableExistsAsync(WareHubDbContext db, string table) =>
+    await db.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS `Value` FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = {0}", table).SingleAsync() > 0;
+static async Task<bool> IndexExistsAsync(WareHubDbContext db, string table, string indexName) =>
+    await db.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS `Value` FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = {0} AND index_name = {1}", table, indexName).SingleAsync() > 0;
+static async Task EnsureDeviceColumnAsync(WareHubDbContext db, string columnName)
+{
+    if (await ColumnExistsAsync(db, "devices", columnName)) return;
+    var sql = columnName switch
+    {
+        "producer" => "ALTER TABLE devices ADD COLUMN producer VARCHAR(100) NULL",
+        "ip_address" => "ALTER TABLE devices ADD COLUMN ip_address VARCHAR(45) NULL",
+        _ => throw new InvalidOperationException("Cột thiết bị không hợp lệ"),
+    };
+    await db.Database.ExecuteSqlRawAsync(sql);
+}
+#pragma warning disable EF1002 // table/indexName/columnExpression are always hardcoded call-site literals from EnsureSchemaAsync above, never user input
+static async Task EnsureIndexAsync(WareHubDbContext db, string table, string indexName, string columnExpression)
+{
+    if (!await IndexExistsAsync(db, table, indexName))
+        await db.Database.ExecuteSqlRawAsync($"CREATE INDEX `{indexName}` ON `{table}` ({columnExpression})");
+}
+static async Task EnsureIndexDroppedAsync(WareHubDbContext db, string table, string indexName)
+{
+    if (await IndexExistsAsync(db, table, indexName))
+        await db.Database.ExecuteSqlRawAsync($"DROP INDEX `{indexName}` ON `{table}`");
+}
 #pragma warning restore EF1002
 static async Task EnsureHandoverTableAsync(WareHubDbContext db)
 {
@@ -504,13 +628,12 @@ static async Task EnsureHandoverTableAsync(WareHubDbContext db)
             UNIQUE INDEX IX_handovers_no (`no`)
         )
         """);
-    var hasPayload = await db.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS `Value` FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'handovers' AND column_name = 'payload'").SingleAsync();
-    if (hasPayload == 0) await db.Database.ExecuteSqlRawAsync("ALTER TABLE handovers ADD COLUMN payload LONGTEXT NULL AFTER full_name");
+    if (!await ColumnExistsAsync(db, "handovers", "payload"))
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE handovers ADD COLUMN payload LONGTEXT NULL AFTER full_name");
 }
 static async Task EnsureDeviceHistoryTableAsync(WareHubDbContext db)
 {
-    var exists = await db.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS `Value` FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'device_history'").SingleAsync();
-    if (exists > 0) return;
+    if (await TableExistsAsync(db, "device_history")) return;
     await db.Database.ExecuteSqlRawAsync("""
         CREATE TABLE device_history (
             Id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,

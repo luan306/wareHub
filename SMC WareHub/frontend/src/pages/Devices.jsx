@@ -6,30 +6,25 @@ import { usePrintQueue } from '../context/PrintQueueContext';
 import { LabelPreview, PrintLabelModal } from '../components/LabelPreview';
 import { HandoverModal, HandoverSheet, buildHandoverData, mergeSpecs } from '../components/HandoverSheet';
 import { Pager } from '../components/Pager';
-import { setPrintPageSize, labelPageCss, HANDOVER_PAGE_CSS, printWithBodyClass } from '../utils/printPageSize';
-
-const LOAI_LABELS = {
-  laptop: 'Laptop',
-  tablet: 'Tablet',
-  pda: 'PDA',
-  monitor: 'Màn hình',
-  phone: 'Điện thoại',
-};
+import { setPrintPageSize, labelPageCss, printHandoverSheets, printWithBodyClass } from '../utils/printPageSize';
+import { LOAI_LABELS } from '../utils/deviceTypes';
+import { useT } from '../i18n';
+import { useReconnect } from '../context/ConnectionContext';
 
 const emptyForm = { id: null, source_id: null, original_ma: '', ma: '', ten: '', loai: 'laptop', model: '', producer: '', ip_address: '', cpu: '', ram: '', storage: '', is_active: false, user_name: '', registered_at: '', phong_ban: '', ghi_chu: '' };
 
 // Cột của bảng thiết bị — bấm chuột phải vào tiêu đề bảng để tick ẩn/hiện từng cột.
 const COLUMN_DEFS = [
-  { key: 'ma', label: 'Serial Number', className: 'mono', cell: (d) => d.ma },
-  { key: 'model', label: 'Model', cell: (d) => d.model || '—' },
-  { key: 'producer', label: 'Producer', cell: (d) => d.producer || '—' },
-  { key: 'loai', label: 'Type', cell: (d) => LOAI_LABELS[d.loai] },
-  { key: 'ten', label: 'Device Name', cell: (d) => d.ten },
-  { key: 'user_name', label: 'User Name', cell: (d) => d.user_name || '—' },
-  { key: 'phong_ban', label: 'Dept', cell: (d) => d.phong_ban || '—' },
-  { key: 'ip_address', label: 'IP Address', cell: (d) => d.ip_address || '—' },
-  { key: 'ghi_chu', label: 'Comment', cell: (d) => d.ghi_chu || '—' },
-  { key: 'registered_at', label: 'Date', cell: (d) => (d.registered_at ? d.registered_at.slice(0, 10) : '—') },
+  { key: 'ma', labelKey: 'field.ma', className: 'mono', cell: (d) => d.ma },
+  { key: 'model', labelKey: 'field.model', cell: (d) => d.model || '—' },
+  { key: 'producer', labelKey: 'field.producer', cell: (d) => d.producer || '—' },
+  { key: 'loai', labelKey: 'field.loai', cell: (d, t) => t(`loai.${d.loai}`) },
+  { key: 'ten', labelKey: 'field.ten', cell: (d) => d.ten },
+  { key: 'user_name', labelKey: 'field.user_name', cell: (d) => d.user_name || '—' },
+  { key: 'phong_ban', labelKey: 'field.phong_ban', cell: (d) => d.phong_ban || '—' },
+  { key: 'ip_address', labelKey: 'field.ip_address', cell: (d) => d.ip_address || '—' },
+  { key: 'ghi_chu', labelKey: 'field.ghi_chu', cell: (d) => d.ghi_chu || '—' },
+  { key: 'registered_at', labelKey: 'field.date', cell: (d) => (d.registered_at ? d.registered_at.slice(0, 10) : '—') },
 ];
 const COLUMN_STORAGE_KEY = 'warehub-devices-columns';
 
@@ -45,9 +40,34 @@ function loadColumnVisibility() {
 // Khớp giới hạn deviceIds tối đa của endpoint POST /print ở backend — chặn sớm ở đây
 // để tránh render hàng trăm/nghìn tem cùng lúc làm treo trình duyệt trước khi kịp báo lỗi.
 const MAX_PRINT_BATCH = 500;
+const LOAI_KEYS = Object.keys(LOAI_LABELS);
+
+const toggleInSet = (set, id) => {
+  const next = new Set(set);
+  if (next.has(id)) next.delete(id); else next.add(id);
+  return next;
+};
+
+// Các trường của form thiết bị lấy từ 1 thiết bị (dùng chung cho Sửa và Clone).
+const deviceToFormFields = (device) => ({
+  ma: device.ma,
+  ten: device.ten || '',
+  loai: device.loai || 'laptop',
+  model: device.model || '',
+  producer: device.producer || '',
+  ip_address: device.ip_address || '',
+  cpu: device.cpu || '',
+  ram: device.ram || '',
+  storage: device.storage || '',
+  user_name: device.user_name || '',
+  registered_at: device.registered_at ? device.registered_at.slice(0, 10) : '',
+  phong_ban: device.phong_ban || '',
+  ghi_chu: device.ghi_chu || '',
+});
 
 export function Devices() {
   const { isAdmin } = useAuth();
+  const { t } = useT();
   const { queue, addDevices, removeDevice, clearQueue } = usePrintQueue();
 
   const [devices, setDevices] = useState([]);
@@ -103,9 +123,11 @@ export function Devices() {
   }, [search, loaiFilter, page, pageSize, sort]);
 
   useEffect(() => {
-    const t = setTimeout(fetchDevices, 250); // debounce khi gõ tìm kiếm
-    return () => clearTimeout(t);
+    const timer = setTimeout(fetchDevices, 250); // debounce khi gõ tìm kiếm
+    return () => clearTimeout(timer);
   }, [fetchDevices]);
+
+  useReconnect(fetchDevices);
 
   useEffect(() => {
     try { localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(columnVisibility)); } catch { /* bỏ qua */ }
@@ -146,11 +168,7 @@ export function Devices() {
   }
 
   function toggleSelect(id) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+    setSelected((prev) => toggleInSet(prev, id));
   }
 
   function toggleSelectAll() {
@@ -184,11 +202,7 @@ export function Devices() {
   }
 
   function togglePrintListItem(id) {
-    setPrintListSelection((previous) => {
-      const next = new Set(previous);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+    setPrintListSelection((previous) => toggleInSet(previous, id));
   }
 
   function deleteSelectedPrintItems() {
@@ -202,7 +216,7 @@ export function Devices() {
 
   function commitReview(incoming) {
     setError('');
-    setAddedNotice(`Đã thêm ${incoming.length} thiết bị vào hàng đợi in.`);
+    setAddedNotice(t('dev.queueAdded', { count: incoming.length }));
     addDevices(incoming);
     setSelected((previous) => {
       const next = new Set(previous);
@@ -217,12 +231,12 @@ export function Devices() {
     const incoming = devices.filter((device) => printListSelection.has(device.id));
 
     if (incoming.length > MAX_PRINT_BATCH) {
-      setError(`Chỉ được chọn tối đa ${MAX_PRINT_BATCH} thiết bị trong một lượt in. Bạn đang chọn ${incoming.length} thiết bị — vui lòng chia nhỏ ra nhiều lượt.`);
+      setError(t('dev.printTooMany', { max: MAX_PRINT_BATCH, count: incoming.length }));
       return;
     }
 
     if (new Set(incoming.map((d) => d.kho)).size > 1) {
-      setError('Bạn đang chọn lẫn cả tem 12mm và 24mm. Vui lòng chỉ chọn một khổ tem trong một lượt.');
+      setError(t('dev.mixedKho'));
       return;
     }
 
@@ -234,7 +248,7 @@ export function Devices() {
     }
 
     if (queue.length + incoming.length > MAX_PRINT_BATCH) {
-      setError(`Hàng đợi in hiện có ${queue.length} thiết bị, thêm ${incoming.length} thiết bị nữa sẽ vượt quá giới hạn ${MAX_PRINT_BATCH} thiết bị/lượt in. Vui lòng in hàng đợi hiện tại trước hoặc chọn ít hơn.`);
+      setError(t('dev.queueTooMany', { queue: queue.length, incoming: incoming.length, max: MAX_PRINT_BATCH }));
       return;
     }
 
@@ -268,10 +282,10 @@ export function Devices() {
     setExporting(true);
     setError('');
     try {
-      // K\u00E9o to\u00E0n b\u1ED9 thi\u1EBFt b\u1ECB kh\u1EDBp b\u1ED9 l\u1ECDc hi\u1EC7n t\u1EA1i qua t\u1EEBng trang (kh\u00F4ng ch\u1EC9 trang \u0111ang xem),
-      // \u0111\u1EC3 export \u0111\u00FAng ngh\u0129a "to\u00E0n b\u1ED9 kho" k\u1EC3 c\u1EA3 khi c\u00F3 h\u00E0ng ngh\u00ECn thi\u1EBFt b\u1ECB. L\u1EA5y trang \u0111\u1EA7u \u0111\u1EC3 bi\u1EBFt
-      // t\u1ED5ng s\u1ED1 trang, r\u1ED3i t\u1EA3i c\u00E1c trang c\u00F2n l\u1EA1i song song (gi\u1EDBi h\u1EA1n s\u1ED1 l\u01B0\u1EE3t c\u00F9ng l\u00FAc) thay v\u00EC
-      // tu\u1EA7n t\u1EF1 t\u1EEBng trang m\u1ED9t \u2014 nhanh h\u01A1n nhi\u1EC1u l\u1EA7n khi d\u1EEF li\u1EC7u l\u1EDBn.
+      // Kéo toàn bộ thiết bị khớp bộ lọc hiện tại qua từng trang (không chỉ trang đang xem),
+      // để export đúng nghĩa "toàn bộ kho" kể cả khi có hàng nghìn thiết bị. Lấy trang đầu để biết
+      // tổng số trang, rồi tải các trang còn lại song song (giới hạn số lượt cùng lúc) thay vì
+      // tuần tự từng trang một — nhanh hơn nhiều lần khi dữ liệu lớn.
       const CONCURRENCY = 6;
       const first = await api.get('/devices', { search, loai: loaiFilter, page: 1, pageSize: 100 });
       const pages = [first.devices];
@@ -283,8 +297,8 @@ export function Devices() {
       }
       const all = pages.flat();
 
-      const headers = ['Serial Number', 'Model', 'Producer', 'Type', 'Device Name', 'User Name', 'Dept', 'IP Address', 'Comment', 'Date'];
-      const rows = all.map((device) => [device.ma, device.model || '', device.producer || '', LOAI_LABELS[device.loai] || device.loai, device.ten, device.user_name || '', device.phong_ban || '', device.ip_address || '', device.ghi_chu || '', device.registered_at ? device.registered_at.slice(0, 10) : '']);
+      const headers = ['ma', 'model', 'producer', 'loai', 'ten', 'user_name', 'phong_ban', 'ip_address', 'ghi_chu', 'date'].map((key) => t(`field.${key}`));
+      const rows = all.map((device) => [device.ma, device.model || '', device.producer || '', LOAI_LABELS[device.loai] ? t(`loai.${device.loai}`) : device.loai, device.ten, device.user_name || '', device.phong_ban || '', device.ip_address || '', device.ghi_chu || '', device.registered_at ? device.registered_at.slice(0, 10) : '']);
       const csv = [headers, ...rows].map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(',')).join('\r\n');
       const link = document.createElement('a');
       link.href = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }));
@@ -299,18 +313,18 @@ export function Devices() {
   }
 
   async function syncFromGlpi() {
-    if (!confirm('Đồng bộ máy tính và điện thoại từ GLPI vào WareHub? Thiết bị đã có (khớp Serial Number) sẽ được cập nhật, thiết bị mới sẽ được thêm vào.')) return;
+    if (!confirm(t('dev.confirmSync'))) return;
     setSyncingGlpi(true);
     setError('');
     try {
       const result = await api.post('/devices/glpi-sync', {});
       const lines = [
-        `Đồng bộ xong: ${result.created} thiết bị mới, ${result.updated} cập nhật, ${result.unchanged} không đổi.`,
-        `Lấy từ GLPI: ${result.computers} máy tính, ${result.phones} điện thoại.`,
+        t('dev.syncDone', { created: result.created, updated: result.updated, unchanged: result.unchanged }),
+        t('dev.syncFetched', { computers: result.computers, phones: result.phones }),
       ];
-      if (result.skipped) lines.push(`${result.skipped} bỏ qua (thiếu Serial Number).`);
-      if (result.duplicates) lines.push(`${result.duplicates} bỏ qua (trùng Serial Number).`);
-      if (result.phone_error) lines.push(`Không lấy được điện thoại: ${result.phone_error}`);
+      if (result.skipped) lines.push(t('dev.syncSkipped', { count: result.skipped }));
+      if (result.duplicates) lines.push(t('dev.syncDuplicates', { count: result.duplicates }));
+      if (result.phone_error) lines.push(t('dev.syncPhoneError', { error: result.phone_error }));
       alert(lines.join('\n'));
       fetchDevices();
     } catch (err) {
@@ -324,10 +338,10 @@ export function Devices() {
     const chosen = devices.filter((d) => selected.has(d.id));
     if (chosen.length === 0) return;
     if (chosen.length > MAX_PRINT_BATCH) {
-      setError(`Chỉ được tạo tối đa ${MAX_PRINT_BATCH} phiếu trong một lượt. Bạn đang chọn ${chosen.length} thiết bị — vui lòng chia nhỏ ra nhiều lượt.`);
+      setError(t('dev.bulkTooMany', { max: MAX_PRINT_BATCH, count: chosen.length }));
       return;
     }
-    if (!confirm(`Tạo và lưu ${chosen.length} phiếu bàn giao — mỗi thiết bị đã chọn 1 phiếu riêng, họ tên/bộ phận lấy theo thông tin thiết bị?`)) return;
+    if (!confirm(t('dev.bulkConfirm', { count: chosen.length }))) return;
     setError('');
     setBulkHandoverBusy(true);
     try {
@@ -345,15 +359,7 @@ export function Devices() {
       }
       setSelected(new Set());
       flushSync(() => setBulkHandoverItems(created));
-      const cleanup = () => {
-        document.body.classList.remove('printing-handover');
-        window.removeEventListener('afterprint', cleanup);
-        setBulkHandoverItems(null);
-      };
-      document.body.classList.add('printing-handover');
-      window.addEventListener('afterprint', cleanup);
-      setPrintPageSize(HANDOVER_PAGE_CSS);
-      window.print();
+      printHandoverSheets(() => setBulkHandoverItems(null));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -368,46 +374,13 @@ export function Devices() {
   }
 
   function openEditModal(device) {
-    setForm({
-      id: device.id,
-      original_ma: device.ma,
-      ma: device.ma,
-      ten: device.ten,
-      loai: device.loai,
-      model: device.model || '',
-      producer: device.producer || '',
-      ip_address: device.ip_address || '',
-      cpu: device.cpu || '',
-      ram: device.ram || '',
-      storage: device.storage || '',
-      user_name: device.user_name || '',
-      registered_at: device.registered_at ? device.registered_at.slice(0, 10) : '',
-      phong_ban: device.phong_ban || '',
-      ghi_chu: device.ghi_chu || '',
-    });
+    setForm({ id: device.id, original_ma: device.ma, ...deviceToFormFields(device) });
     setFormError('');
     setModalOpen(true);
   }
 
   function openCloneModal(device) {
-    setForm({
-      ...device,
-      id: null,
-      source_id: device.id,
-      ma: `${device.ma}-COPY`,
-      ten: device.ten || '',
-      loai: device.loai || 'laptop',
-      model: device.model || '',
-      producer: device.producer || '',
-      ip_address: device.ip_address || '',
-      cpu: device.cpu || '',
-      ram: device.ram || '',
-      storage: device.storage || '',
-      user_name: device.user_name || '',
-      phong_ban: device.phong_ban || '',
-      ghi_chu: device.ghi_chu || '',
-      registered_at: device.registered_at ? device.registered_at.slice(0, 10) : '',
-    });
+    setForm({ ...device, id: null, source_id: device.id, ...deviceToFormFields(device), ma: `${device.ma}-COPY` });
     setFormError('');
     setModalOpen(true);
   }
@@ -432,7 +405,7 @@ export function Devices() {
   }
 
   async function handleDelete(device) {
-    if (!confirm(`Xoá thiết bị "${device.ten}" (${device.ma})?`)) return;
+    if (!confirm(t('dev.confirmDelete', { name: device.ten, code: device.ma }))) return;
     try {
       await api.del(`/devices/${device.id}`);
       fetchDevices();
@@ -470,38 +443,35 @@ export function Devices() {
       printWithBodyClass('printing-labels');
       setInstantPrintDevice(null);
     }, 80);
-    if (date) {
-      console.log('QR code printing date:', date);
-    }
   }
 
   return (
     <div>
       <div className="page-head manage-head">
-        <h2>Account Manage</h2>
+        <h2>{t('dev.title')}</h2>
         <div className="manage-actions">
-          <button className="btn-secondary" type="button" onClick={exportInventory} disabled={exporting}>{exporting ? 'Đang xuất...' : 'Export Inventory'}</button>
-          {isAdmin && <button className="btn-secondary" type="button" onClick={syncFromGlpi} disabled={syncingGlpi}>{syncingGlpi ? 'Đang đồng bộ...' : 'Đồng bộ từ GLPI'}</button>}
-          {isAdmin && <button className="btn-primary" type="button" onClick={openCreateModal}>Add New</button>}
+          <button className="btn-secondary" type="button" onClick={exportInventory} disabled={exporting}>{exporting ? t('dev.exporting') : t('dev.exportInventory')}</button>
+          {isAdmin && <button className="btn-secondary" type="button" onClick={syncFromGlpi} disabled={syncingGlpi}>{syncingGlpi ? t('dev.syncing') : t('dev.syncGlpi')}</button>}
+          {isAdmin && <button className="btn-primary" type="button" onClick={openCreateModal}>{t('dev.addNew')}</button>}
           <button className="btn-secondary" type="button" onClick={createBulkHandovers} disabled={selected.size === 0 || bulkHandoverBusy}>
-            {bulkHandoverBusy ? 'Đang tạo phiếu...' : `Tạo phiếu bàn giao${selected.size > 0 ? ` (${selected.size})` : ''}`}
+            {bulkHandoverBusy ? t('dev.creatingSlips') : `${t('dev.createSlips')}${selected.size > 0 ? ` (${selected.size})` : ''}`}
           </button>
           <button className="btn-primary" type="button" onClick={openPrintListModal} disabled={selected.size === 0 && queue.length === 0}>
-            Print Label List{queue.length > 0 ? ` (${queue.length})` : ''}
+            {t('dev.printLabelList')}{queue.length > 0 ? ` (${queue.length})` : ''}
           </button>
         </div>
       </div>
 
       <div className="toolbar">
         <input
-          placeholder="Tìm theo serial, tên máy, phòng ban, user, IP..."
+          placeholder={t('dev.searchPlaceholder')}
           value={search}
           onChange={(e) => { setPage(1); setSearch(e.target.value); }}
         />
         <select value={loaiFilter} onChange={(e) => { setPage(1); setLoaiFilter(e.target.value); }}>
-          <option value="">Tất cả loại</option>
-          {Object.entries(LOAI_LABELS).map(([k, v]) => (
-            <option key={k} value={k}>{v}</option>
+          <option value="">{t('dev.allTypes')}</option>
+          {LOAI_KEYS.map((k) => (
+            <option key={k} value={k}>{t(`loai.${k}`)}</option>
           ))}
         </select>
       </div>
@@ -510,7 +480,7 @@ export function Devices() {
       <div className="inventory-table-wrap">
       <table className="data-table inventory-table">
         <thead>
-          <tr onContextMenu={openColumnMenu} title="Bấm chuột phải để ẩn/hiện cột">
+          <tr onContextMenu={openColumnMenu} title={t('dev.columnsHint')}>
             <th>
               <input
                 type="checkbox"
@@ -518,10 +488,10 @@ export function Devices() {
                 onChange={toggleSelectAll}
               />
             </th>
-            <th className="action-col">Action</th>
+            <th className="action-col">{t('dev.action')}</th>
             {visibleColumns.map((c) => (
               <th key={c.key} className="sortable-col" onClick={(event) => { event.stopPropagation(); toggleSort(c.key); }}>
-                {c.label}
+                {t(c.labelKey)}
                 <span className={`sort-arrow${sort.by === c.key ? ' active' : ''}`}>{sort.by === c.key ? (sort.dir === 'asc' ? '▲' : '▼') : '⇅'}</span>
               </th>
             ))}
@@ -529,10 +499,10 @@ export function Devices() {
         </thead>
         <tbody>
           {loading && (
-            <tr><td colSpan={2 + visibleColumns.length} className="empty-row">Đang tải...</td></tr>
+            <tr><td colSpan={2 + visibleColumns.length} className="empty-row">{t('common.loading')}</td></tr>
           )}
           {!loading && devices.length === 0 && (
-            <tr><td colSpan={2 + visibleColumns.length} className="empty-row">Chưa có thiết bị nào</td></tr>
+            <tr><td colSpan={2 + visibleColumns.length} className="empty-row">{t('dev.empty')}</td></tr>
           )}
           {devices.map((d) => (
             <tr key={d.id}>
@@ -541,16 +511,16 @@ export function Devices() {
               </td>
               <td className="action-col">
                 <div className="row-actions">
-                  <button className="print-now-action" onClick={() => handlePrintNow(d)} disabled={printingId === d.id}>{printingId === d.id ? 'Đang in...' : 'In ngay'}</button>
-                  <button onClick={() => setHandoverDevice(d)}>Phiếu BG</button>
+                  <button className="print-now-action" onClick={() => handlePrintNow(d)} disabled={printingId === d.id}>{printingId === d.id ? t('dev.printing') : t('dev.printNow')}</button>
+                  <button onClick={() => setHandoverDevice(d)}>{t('dev.slip')}</button>
                   {isAdmin && <>
-                  <button onClick={() => openEditModal(d)}>Sửa</button>
-                  <button onClick={() => openCloneModal(d)}>Clone</button>
-                  <button onClick={() => handleDelete(d)}>Xoá</button>
+                  <button onClick={() => openEditModal(d)}>{t('common.edit')}</button>
+                  <button onClick={() => openCloneModal(d)}>{t('dev.clone')}</button>
+                  <button onClick={() => handleDelete(d)}>{t('common.delete')}</button>
                   </>}
                 </div>
               </td>
-              {visibleColumns.map((c) => <td key={c.key} className={c.className}>{c.cell(d)}</td>)}
+              {visibleColumns.map((c) => <td key={c.key} className={c.className} data-label={t(c.labelKey)}>{c.cell(d, t)}</td>)}
             </tr>
           ))}
         </tbody>
@@ -559,25 +529,25 @@ export function Devices() {
 
       {columnMenu && (
         <div className="col-menu" ref={columnMenuRef} style={{ left: columnMenu.x, top: columnMenu.y }}>
-          <div className="col-menu-title">Hiện cột</div>
+          <div className="col-menu-title">{t('dev.showColumns')}</div>
           {COLUMN_DEFS.map((c) => (
             <label className="col-menu-item" key={c.key}>
               <input type="checkbox" checked={columnVisibility[c.key]} onChange={() => toggleColumn(c.key)} />
-              {c.label}
+              {t(c.labelKey)}
             </label>
           ))}
-          <button type="button" className="col-menu-reset" onClick={() => setColumnVisibility(Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, true])))}>Hiện tất cả</button>
+          <button type="button" className="col-menu-reset" onClick={() => setColumnVisibility(Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, true])))}>{t('dev.showAll')}</button>
         </div>
       )}
 
-      <Pager page={page} pageSize={pageSize} total={total} totalPages={totalPages} unit="thiết bị" onPage={setPage} onPageSize={(size) => { setPage(1); setPageSize(size); }} />
+      <Pager page={page} pageSize={pageSize} total={total} totalPages={totalPages} unit={t('unit.devices')} onPage={setPage} onPageSize={(size) => { setPage(1); setPageSize(size); }} />
 
       {printListOpen && (
         <div className="modal-backdrop" onClick={closePrintListModal}>
           <div className="modal-card print-list-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header">
-              <h2 className="modal-title">Print Label</h2>
-              <button type="button" className="btn-close" aria-label="Close" onClick={closePrintListModal}>×</button>
+              <h2 className="modal-title">{t('print.title')}</h2>
+              <button type="button" className="btn-close" aria-label={t('print.close')} onClick={closePrintListModal}>×</button>
             </div>
             <div className="modal-body">
               {error && <div className="error-box">{error}</div>}
@@ -587,11 +557,11 @@ export function Devices() {
                     <thead>
                       <tr>
                         <th style={{ width: '5%' }}><input type="checkbox" checked={printListSelection.size > 0 && printListSelection.size === selected.size} onChange={() => setPrintListSelection(printListSelection.size === selected.size ? new Set() : new Set(selected))} /></th>
-                        <th style={{ width: '15%' }}>Serial Number</th>
-                        <th style={{ width: '10%' }}>Model</th>
-                        <th style={{ width: '10%' }}>Type</th>
-                        <th style={{ width: '15%' }}>Device Name</th>
-                        <th style={{ width: '15%' }}>User Name</th>
+                        <th style={{ width: '15%' }}>{t('field.ma')}</th>
+                        <th style={{ width: '10%' }}>{t('field.model')}</th>
+                        <th style={{ width: '10%' }}>{t('field.loai')}</th>
+                        <th style={{ width: '15%' }}>{t('field.ten')}</th>
+                        <th style={{ width: '15%' }}>{t('field.user_name')}</th>
                         <th style={{ width: '5%' }}></th>
                       </tr>
                     </thead>
@@ -599,8 +569,8 @@ export function Devices() {
                       {devices.filter((device) => selected.has(device.id)).map((device) => (
                         <tr key={device.id}>
                           <td><input type="checkbox" checked={printListSelection.has(device.id)} onChange={() => togglePrintListItem(device.id)} /></td>
-                          <td className="mono">{device.ma}</td><td>{device.model || 'N/A'}</td><td>{LOAI_LABELS[device.loai]}</td><td>{device.ten}</td><td>{device.user_name || 'N/A'}</td>
-                          <td><button type="button" className="print-list-delete" aria-label={`Remove ${device.ma}`} onClick={() => togglePrintListItem(device.id)}><TrashIcon /></button></td>
+                          <td className="mono">{device.ma}</td><td>{device.model || 'N/A'}</td><td>{t(`loai.${device.loai}`)}</td><td>{device.ten}</td><td>{device.user_name || 'N/A'}</td>
+                          <td><button type="button" className="print-list-delete" aria-label={t('print.remove', { code: device.ma })} onClick={() => togglePrintListItem(device.id)}><TrashIcon /></button></td>
                         </tr>
                       ))}
                     </tbody>
@@ -608,15 +578,15 @@ export function Devices() {
                 </div>
               ) : (
                 <>
-                  <h6 className="text-primary mb-3">Review</h6>
+                  <h6 className="text-primary mb-3">{t('print.review')}</h6>
                   {addedNotice && <div className="notice-box">{addedNotice}</div>}
                   {queue.length === 0 ? (
-                    <div className="empty-state">Chưa có tem nào để in.</div>
+                    <div className="empty-state">{t('print.noLabels')}</div>
                   ) : (
                     <div className="label-grid">
                       {queue.map((device) => (
                         <div className="label-card" key={device.id}>
-                          <button className="del" title="Bỏ khỏi hàng đợi" onClick={() => removeDevice(device.id)}>×</button>
+                          <button className="del" title={t('print.removeFromQueue')} onClick={() => removeDevice(device.id)}>×</button>
                           <LabelPreview device={device} />
                         </div>
                       ))}
@@ -626,17 +596,17 @@ export function Devices() {
               )}
             </div>
             <div className="modal-footer print-list-footer">
-              <button type="button" className="btn-secondary" onClick={closePrintListModal}>Close</button>
+              <button type="button" className="btn-secondary" onClick={closePrintListModal}>{t('print.close')}</button>
               {!labelReviewOpen ? (
                 <>
-                  <button type="button" className="btn-secondary btn-danger-hover" onClick={deleteSelectedPrintItems} disabled={printListSelection.size === 0}>Delete Selected Items</button>
-                  <button type="button" className="btn-primary" onClick={reviewPrintList} disabled={printListSelection.size === 0}>Review</button>
+                  <button type="button" className="btn-secondary btn-danger-hover" onClick={deleteSelectedPrintItems} disabled={printListSelection.size === 0}>{t('print.deleteSelected')}</button>
+                  <button type="button" className="btn-primary" onClick={reviewPrintList} disabled={printListSelection.size === 0}>{t('print.review')}</button>
                 </>
               ) : (
                 <>
-                  <button type="button" className="btn-secondary btn-danger-hover" onClick={clearQueue} disabled={queue.length === 0}>Xóa hết</button>
+                  <button type="button" className="btn-secondary btn-danger-hover" onClick={clearQueue} disabled={queue.length === 0}>{t('print.clearAll')}</button>
                   <button type="button" className="btn-primary" onClick={handlePrintQueue} disabled={queue.length === 0 || queuePrinting}>
-                    {queuePrinting ? 'Đang in...' : `Print${queue.length > 0 ? ` (${queue.length})` : ''}`}
+                    {queuePrinting ? t('print.printing') : `${t('print.print')}${queue.length > 0 ? ` (${queue.length})` : ''}`}
                   </button>
                 </>
               )}
@@ -649,26 +619,26 @@ export function Devices() {
         <div className="modal-backdrop" onClick={() => setKhoConflict(null)}>
           <div className="modal-card kho-conflict-modal" onClick={(event) => event.stopPropagation()}>
             <div className="kho-conflict-icon">!</div>
-            <h3>Khác khổ tem</h3>
+            <h3>{t('kho.conflictTitle')}</h3>
             <p className="kho-conflict-text">
-              Không thể gộp hai khổ tem trong cùng một lượt in. Hàng đợi hiện tại sẽ bị xoá nếu bạn tiếp tục.
+              {t('kho.conflictText')}
             </p>
             <div className="kho-conflict-compare">
               <div className="kho-chip">
                 <span className="kho-chip-size">{khoConflict.queueKho}mm</span>
-                <span className="kho-chip-label">{khoConflict.queueKho === '12' ? 'Điện thoại' : 'Laptop / Tablet / PDA / Màn hình'}</span>
-                <span className="kho-chip-count">{khoConflict.queueCount} thiết bị đang chờ in</span>
+                <span className="kho-chip-label">{t(`kho.${khoConflict.queueKho}`)}</span>
+                <span className="kho-chip-count">{t('kho.waiting', { count: khoConflict.queueCount })}</span>
               </div>
               <div className="kho-conflict-arrow">→</div>
               <div className="kho-chip kho-chip-new">
                 <span className="kho-chip-size">{khoConflict.incomingKho}mm</span>
-                <span className="kho-chip-label">{khoConflict.incomingKho === '12' ? 'Điện thoại' : 'Laptop / Tablet / PDA / Màn hình'}</span>
-                <span className="kho-chip-count">{khoConflict.incoming.length} thiết bị vừa chọn</span>
+                <span className="kho-chip-label">{t(`kho.${khoConflict.incomingKho}`)}</span>
+                <span className="kho-chip-count">{t('kho.justSelected', { count: khoConflict.incoming.length })}</span>
               </div>
             </div>
             <div className="modal-actions">
-              <button type="button" className="btn-secondary" onClick={() => setKhoConflict(null)}>Huỷ</button>
-              <button type="button" className="btn-primary btn-warning" onClick={confirmKhoSwap}>Xoá hàng đợi cũ &amp; thêm mới</button>
+              <button type="button" className="btn-secondary" onClick={() => setKhoConflict(null)}>{t('common.cancel')}</button>
+              <button type="button" className="btn-primary btn-warning" onClick={confirmKhoSwap}>{t('kho.replace')}</button>
             </div>
           </div>
         </div>
@@ -705,32 +675,32 @@ export function Devices() {
         <div className="modal-backdrop" onClick={() => setModalOpen(false)}>
           <form className="modal-card modal-xl update-device-modal" onClick={(e) => e.stopPropagation()} onSubmit={handleSaveDevice}>
             <div className="modal-header">
-              <h2 className="modal-title">{form.source_id ? 'Clone' : form.id ? 'Update' : 'Add'}</h2>
-              <button type="button" className="btn-close" aria-label="Close" onClick={() => setModalOpen(false)}>×</button>
+              <h2 className="modal-title">{form.source_id ? t('form.clone') : form.id ? t('form.update') : t('form.add')}</h2>
+              <button type="button" className="btn-close" aria-label={t('common.close')} onClick={() => setModalOpen(false)}>×</button>
             </div>
             <div className="modal-body">
-              <h6 className="text-primary mb-3">Equipment Information</h6>
+              <h6 className="text-primary mb-3">{t('form.section')}</h6>
               <div className="form-row mb-3">
-                <div className="form-col"><label className="form-label">Serial Number</label><input className="form-control" value={form.ma} onChange={(e) => setForm({ ...form, ma: e.target.value })} required /></div>
-                <div className="form-col"><label className="form-label">Model</label><input className="form-control" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} required /></div>
+                <div className="form-col"><label className="form-label">{t('field.ma')}</label><input className="form-control" value={form.ma} onChange={(e) => setForm({ ...form, ma: e.target.value })} required /></div>
+                <div className="form-col"><label className="form-label">{t('field.model')}</label><input className="form-control" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} required /></div>
               </div>
               <div className="form-row mb-3">
-                <div className="form-col"><label className="form-label">Producer</label><input className="form-control" value={form.producer} onChange={(e) => setForm({ ...form, producer: e.target.value })} /></div>
-                <div className="form-col"><label className="form-label">Device Name</label><input className="form-control" value={form.ten} onChange={(e) => setForm({ ...form, ten: e.target.value })} required /></div>
+                <div className="form-col"><label className="form-label">{t('field.producer')}</label><input className="form-control" value={form.producer} onChange={(e) => setForm({ ...form, producer: e.target.value })} /></div>
+                <div className="form-col"><label className="form-label">{t('field.ten')}</label><input className="form-control" value={form.ten} onChange={(e) => setForm({ ...form, ten: e.target.value })} required /></div>
               </div>
               <div className="form-row mb-3">
-                <div className="form-col"><label className="form-label">Type</label><select className="form-select" value={form.loai} onChange={(e) => setForm({ ...form, loai: e.target.value })} required>{Object.entries(LOAI_LABELS).map(([key, value]) => <option key={key} value={key}>{value}</option>)}</select></div>
-                <div className="form-col"><label className="form-label">User Name</label><input className="form-control" value={form.user_name} onChange={(e) => setForm({ ...form, user_name: e.target.value })} /></div>
+                <div className="form-col"><label className="form-label">{t('field.loai')}</label><select className="form-select" value={form.loai} onChange={(e) => setForm({ ...form, loai: e.target.value })} required>{LOAI_KEYS.map((key) => <option key={key} value={key}>{t(`loai.${key}`)}</option>)}</select></div>
+                <div className="form-col"><label className="form-label">{t('field.user_name')}</label><input className="form-control" value={form.user_name} onChange={(e) => setForm({ ...form, user_name: e.target.value })} /></div>
               </div>
               <div className="form-row mb-3">
-                <div className="form-col"><label className="form-label">IP Address</label><input className="form-control" value={form.ip_address} onChange={(e) => setForm({ ...form, ip_address: e.target.value })} /></div>
+                <div className="form-col"><label className="form-label">{t('field.ip_address')}</label><input className="form-control" value={form.ip_address} onChange={(e) => setForm({ ...form, ip_address: e.target.value })} /></div>
               </div>
               {formError && <div className="error-box">{formError}</div>}
             </div>
 
             <div className="modal-actions modal-footer">
-              <button type="button" className="btn-secondary" onClick={() => setModalOpen(false)}>Close</button>
-              <button type="submit" className="btn-primary">Save</button>
+              <button type="button" className="btn-secondary" onClick={() => setModalOpen(false)}>{t('common.close')}</button>
+              <button type="submit" className="btn-primary">{t('common.save')}</button>
             </div>
           </form>
         </div>

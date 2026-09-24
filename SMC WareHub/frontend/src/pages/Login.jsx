@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useT, LanguageSwitch } from '../i18n';
 import smcLogo from '../img/Logo_SMC_Corporation.svg';
 
 export function Login() {
   const { login } = useAuth();
+  const { t } = useT();
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -27,13 +29,14 @@ export function Login() {
 
   return (
     <div className="login-screen">
+      <LanguageSwitch className="login-lang" />
       <form className="login-card" onSubmit={handleSubmit}>
         <div className="login-logo"><img src={smcLogo} alt="SMC" /></div>
-        <div className="login-eyebrow">Warehouse Control Center</div>
-        <h1>Sign in to <span>WareHub</span></h1>
+        <div className="login-eyebrow">{t('login.eyebrow')}</div>
+        <h1>{t('login.titlePrefix')}<span>WareHub</span></h1>
 
         <div className="login-fields">
-          <label htmlFor="username">Username</label>
+          <label htmlFor="username">{t('login.username')}</label>
           <input
             id="username"
             value={username}
@@ -42,7 +45,7 @@ export function Login() {
             required
           />
 
-          <label htmlFor="password">Password</label>
+          <label htmlFor="password">{t('login.password')}</label>
           <input
             id="password"
             type="password"
@@ -53,14 +56,14 @@ export function Login() {
         </div>
 
         <div className="login-options">
-          <label className="remember-option"><input type="checkbox" /> <span>Keep me signed in</span></label>
-          <button className="forgot-link" type="button" onClick={() => setError('Vui lòng liên hệ quản trị viên để đặt lại mật khẩu.')}>Forgot password? ↗</button>
+          <label className="remember-option"><input type="checkbox" /> <span>{t('login.keepSignedIn')}</span></label>
+          <button className="forgot-link" type="button" onClick={() => setError(t('login.forgotMessage'))}>{t('login.forgot')}</button>
         </div>
 
         {error && <div className="error-box">{error}</div>}
 
         <button type="submit" disabled={loading}>
-          {loading ? 'Signing in...' : 'Sign In'}
+          {loading ? t('login.signingIn') : t('login.signIn')}
         </button>
       </form>
     </div>

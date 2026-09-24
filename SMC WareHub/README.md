@@ -104,7 +104,67 @@ Hệ thống dùng cơ chế in gốc của trình duyệt (`window.print()`). T
 2. Trong hộp thoại in của trình duyệt → **More settings** → chỉnh **Paper size** khớp đúng khổ tang tem đang nạp (24mm hoặc 12mm).
 3. Trình duyệt sẽ nhớ cấu hình này cho các lần in sau trên cùng máy.
 
+Kích thước tem: laptop/tablet/PDA/màn hình in trên băng 24mm, tem dài 60mm; điện thoại in trên băng 12mm, tem dài 30mm (QR bên trái, logo SMC và Service Tag chữ đậm bên phải). Trong driver Brother, đặt **Length** đúng độ dài tem (60mm hoặc 30mm) và trong hộp thoại in của Chrome để **Scale = Default (100)**, **Margins = None**.
+
 Vì laptop/tablet/PDA/màn hình dùng khổ 24mm còn điện thoại dùng khổ 12mm, hệ thống gom tem theo từng khổ riêng trong hàng đợi in — nên in từng nhóm khổ tem cùng loại tang đang nạp trong máy in, tránh in lẫn hai khổ trong 1 lượt.
+
+## Triển khai không gián đoạn (blue-green)
+
+Dùng cho máy chủ chạy Docker. Hai bộ hệ thống (**blue** và **green**) cùng dùng 1 cơ sở dữ liệu; chỉ 1 bộ nhận lưu lượng qua `gateway` (nginx). Khi cập nhật, bản mới được dựng lên bộ đang rảnh và kiểm tra xong mới chuyển lưu lượng sang; bản cũ vẫn chạy nên có thể quay lại ngay. Toàn bộ nằm trong thư mục `deploy/` (tách biệt với `docker-compose.yml` ở gốc, vốn chỉ chạy 1 bộ).
+
+```
+người dùng ──► gateway (nginx) ──► web-blue  ──► backend-blue  ──┐
+                    │ (đọc state/upstream.conf)                    ├──► mysql (dùng chung)
+                    └──────────► web-green ──► backend-green ─────┘
+```
+
+**Lần đầu**
+```bash
+cd deploy
+cp .env.example .env        # điền DB_PASSWORD, JWT_SECRET, DEFAULT_ADMIN_PASSWORD, CORS_ORIGIN
+./bluegreen.sh deploy       # dựng mysql + blue + gateway
+```
+(Windows dùng Git Bash hoặc WSL. Nếu trước đó đang chạy `docker-compose.yml` ở gốc thì sao lưu dữ liệu bằng `mysqldump` và nạp lại vào MySQL mới của thư mục `deploy/` — hai bên dùng volume khác nhau.)
+
+**Mỗi lần cập nhật** — sau khi `git pull`:
+```bash
+./bluegreen.sh deploy
+```
+Script làm lần lượt: build bản mới lên bộ đang rảnh (người dùng vẫn dùng bộ hiện tại bình thường) → chờ bản mới **sẵn sàng thật** (`/api/ready` nối được cơ sở dữ liệu và web trả trang chủ) → so phiên bản để chắc là bản mới → kiểm tra cấu hình nginx rồi **nạp lại êm** để chuyển lưu lượng → gọi thử qua gateway, **nếu phiên bản/độ sẵn sàng không đúng thì tự quay lại**. Bản mới không lên được thì **không chuyển gì cả**, hệ thống hiện tại vẫn phục vụ.
+
+| Lệnh | Việc làm |
+|---|---|
+| `./bluegreen.sh rollback` | Chuyển lưu lượng về bản trước ngay lập tức (tự bật lại bản trước nếu đã bị tắt). |
+| `./bluegreen.sh status` | Xem bộ nào đang phục vụ và phiên bản của từng bộ. |
+| `./bluegreen.sh cleanup` | Tắt bộ không còn phục vụ khi đã yên tâm về bản mới (giải phóng tài nguyên). |
+
+**Quy tắc để bản cũ và bản mới dùng chung cơ sở dữ liệu**: trong lúc chuyển, hai phiên bản cùng chạy trên 1 CSDL, nên thay đổi CSDL phải **tương thích ngược** — thêm bảng/cột/chỉ mục thì được (code tự thêm khi khởi động, bản cũ vẫn chạy bình thường); **không** đổi tên/xoá cột hay đổi ý nghĩa dữ liệu trong cùng một lần cập nhật (làm 2 lần: lần 1 thêm cái mới và dùng song song, lần 2 bỏ cái cũ). Thay đổi không tương thích ngược thì dùng **chế độ bảo trì** (mục bên dưới) rồi cập nhật kiểu dừng-và-chạy lại.
+
+**Lưu ý**
+- Chạy đồng thời hai bộ tốn gấp đôi RAM trong lúc chuyển; `cleanup` để trả lại.
+- `JWT_SECRET` phải giữ nguyên qua các lần cập nhật để người dùng không phải đăng nhập lại.
+- Trình duyệt người dùng đang mở tự nhận ra phiên bản mới và hiện thanh "Có phiên bản mới — Tải lại trang" (không ép tải lại).
+- Lúc nginx nạp lại, một vài kết nối keep-alive đang rảnh có thể bị đóng đúng khoảnh khắc trình duyệt dùng lại; trình duyệt tự gửi lại các yêu cầu đọc (GET). Đo thử: khoảng 3 trong ~7.000 yêu cầu bị reset như vậy, còn yêu cầu đang xử lý dở (kể cả loại chậm 4 giây) đều hoàn tất bình thường.
+- Đã kiểm thử bằng cách chạy nguyên `bluegreen.sh` với nginx thật và 2 bản backend thật dưới tải, nhưng **chưa chạy trên Docker thật** (máy phát triển không cài Docker): lần đầu chạy trên máy chủ nên theo dõi log.
+
+## Cập nhật code & chế độ bảo trì
+
+(Nếu đã dùng blue-green ở trên thì cập nhật thường không cần bảo trì; mục này dành cho thay đổi không tương thích ngược hoặc khi không dùng blue-green.)
+
+Khi cập nhật, báo cho người dùng biết thay vì để họ gặp lỗi khó hiểu:
+
+1. **Bật bảo trì** (chọn 1 trong 2 cách):
+   - Trên web (tài khoản admin): bấm nút 🛠 ở đầu trang → nhập thông báo và giờ dự kiến xong (không bắt buộc) → **Bật bảo trì**.
+   - Hoặc bằng script (chạy được cả khi backend đang tắt): `.\scripts\maintenance.ps1 on "Đang cập nhật phiên bản mới" -Until "2026-09-25 09:30"`
+2. Dừng backend → copy code mới → build frontend (`npm run build`) và backend → chạy lại backend.
+3. Kiểm tra nhanh bằng tài khoản admin (admin vẫn dùng được khi đang bảo trì).
+4. **Tắt bảo trì**: nút 🛠 hoặc thanh vàng ở đầu trang → **Tắt bảo trì**, hoặc `.\scripts\maintenance.ps1 off`.
+
+Người dùng khác thấy màn hình "Hệ thống đang bảo trì" kèm thông báo và giờ dự kiến; trang tự tiếp tục khi bảo trì tắt. Chế độ bảo trì là file `backend-dotnet/maintenance.json` (đổi vị trí bằng cấu hình `Maintenance:FlagFile`) nên còn nguyên qua các lần khởi động lại backend; nhớ **tắt** sau khi cập nhật xong.
+
+Nếu chỉ tắt/khởi động lại backend mà quên bật bảo trì, trình duyệt người dùng vẫn tự hiện "Không kết nối được máy chủ", tự tiếp tục khi backend chạy lại, và **tự tải lại trang khi phát hiện phiên bản mới** để lấy giao diện mới (dữ liệu chưa lưu trong ô nhập sẽ mất, riêng phiếu bàn giao đang soạn được lưu nháp tự động).
+
+**Khi mất mạng / mất kết nối máy chủ**: trình duyệt mất mạng thì hiện thanh đỏ cảnh báo (vẫn xem được dữ liệu đã tải, nhưng lưu và in chưa làm được vì việc in ghi lịch sử lên máy chủ); có mạng trở lại thì tự tải lại dữ liệu. Font chữ tải không chặn hiển thị nên mạng nội bộ chặn Google Fonts thì trang vẫn mở ngay bằng font hệ thống (tem in có thể khác font).
 
 ## Cấu trúc dữ liệu chính
 

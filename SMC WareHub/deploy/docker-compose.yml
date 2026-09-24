@@ -1,0 +1,94 @@
+# Triển khai blue-green: hai bộ (blue, green) chạy cạnh nhau, chỉ MỘT bộ nhận lưu lượng qua "gateway".
+# Cập nhật = dựng bản mới lên bộ đang rảnh, kiểm tra xong mới chuyển lưu lượng; sự cố thì chuyển ngược lại.
+# Điều khiển bằng ./bluegreen.sh (deploy | rollback | status | cleanup) — đừng dùng `docker compose up` trực tiếp.
+#
+#   người dùng ──► gateway (nginx :80) ──► web-blue  ──► backend-blue  ──┐
+#                       │  (đọc state/upstream.conf)                      ├──► mysql (dùng chung)
+#                       └─────────────► web-green ──► backend-green ─────┘
+name: warehub
+
+x-backend: &backend
+  restart: unless-stopped
+  build:
+    context: ../backend-dotnet
+  environment:
+    ASPNETCORE_ENVIRONMENT: Production
+    # Mỗi bộ tối đa 50 kết nối; hai bộ chạy chồng nhau lúc chuyển đổi (2 x 50) vẫn dưới --max-connections của mysql.
+    ConnectionStrings__Default: "Server=mysql;Port=3306;Database=WareHub;User=root;Password=${DB_PASSWORD:?Cần đặt DB_PASSWORD trong deploy/.env};Maximum Pool Size=50"
+    # PHẢI giống nhau giữa hai bộ để token đăng nhập hiện có vẫn dùng được sau khi chuyển.
+    Jwt__Secret: ${JWT_SECRET:?Cần đặt JWT_SECRET trong deploy/.env}
+    DefaultAdmin__User: ${DEFAULT_ADMIN_USER:-admin}
+    DefaultAdmin__Password: ${DEFAULT_ADMIN_PASSWORD:?Cần đặt DEFAULT_ADMIN_PASSWORD trong deploy/.env}
+    DefaultAdmin__FullName: ${DEFAULT_ADMIN_FULLNAME:-Quan tri vien}
+    Cors__Origins__0: ${CORS_ORIGIN:-http://localhost}
+    # File cờ bảo trì nằm trên volume dùng chung nên bật/tắt bảo trì có hiệu lực với cả hai bộ.
+    Maintenance__FlagFile: /data/maintenance.json
+  volumes:
+    - shared_data:/data
+  depends_on:
+    mysql:
+      condition: service_healthy
+
+x-web: &web
+  restart: unless-stopped
+  build:
+    context: ../frontend
+  volumes:
+    # nginx của image tự thay ${BACKEND_HOST} trong file mẫu này khi khởi động.
+    - ./web.conf.template:/etc/nginx/templates/default.conf.template:ro
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    command: --max-connections=300
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?Cần đặt DB_PASSWORD trong deploy/.env}
+      MYSQL_DATABASE: WareHub
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend-blue:
+    <<: *backend
+    image: warehub-backend:blue
+
+  web-blue:
+    <<: *web
+    image: warehub-web:blue
+    environment:
+      BACKEND_HOST: backend-blue
+    depends_on:
+      - backend-blue
+
+  backend-green:
+    <<: *backend
+    image: warehub-backend:green
+
+  web-green:
+    <<: *web
+    image: warehub-web:green
+    environment:
+      BACKEND_HOST: backend-green
+    depends_on:
+      - backend-green
+
+  # Cổng vào duy nhất. Đổi bộ nhận lưu lượng = sửa state/upstream.conf rồi `nginx -s reload` (nạp lại êm: các
+  # yêu cầu đang xử lý vẫn chạy nốt ở bộ cũ, yêu cầu mới sang bộ mới, không rớt yêu cầu nào).
+  gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Mount cả THƯ MỤC (không mount từng file) để việc ghi đè file bằng đổi tên nguyên tử được container thấy ngay.
+      - ./state:/etc/nginx/state:ro
+
+volumes:
+  mysql_data:
+  shared_data:

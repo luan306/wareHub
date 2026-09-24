@@ -4,16 +4,19 @@ import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { HandoverModal, HandoverSheet, AttachmentSheet, buildHandoverData } from '../components/HandoverSheet';
 import { Pager } from '../components/Pager';
-import { setPrintPageSize, HANDOVER_PAGE_CSS } from '../utils/printPageSize';
+import { useT } from '../i18n';
+import { useReconnect } from '../context/ConnectionContext';
+import { printHandoverSheets } from '../utils/printPageSize';
 
-function formatDateTime(value) {
+function formatDateTime(value, locale) {
   if (!value) return '—';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString(locale, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 export function Handovers() {
   const { isAdmin } = useAuth();
+  const { t, locale } = useT();
   const [items, setItems] = useState([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -46,6 +49,8 @@ export function Handovers() {
     return () => clearTimeout(timer);
   }, [fetchItems]);
 
+  useReconnect(fetchItems);
+
   function toggleOne(item) {
     setSelected((previous) => {
       const next = new Map(previous);
@@ -65,7 +70,7 @@ export function Handovers() {
   }
 
   async function handleDelete(item) {
-    if (!confirm(`Xoá phiếu ${item.no}${item.full_name ? ` (${item.full_name})` : ''}? Không thể khôi phục.`)) return;
+    if (!confirm(t('hvp.confirmDelete', { no: item.no, name: item.full_name ? ` (${item.full_name})` : '' }))) return;
     try {
       await api.del(`/handovers/${item.no}`);
       setSelected((previous) => { const next = new Map(previous); next.delete(item.no); return next; });
@@ -79,32 +84,24 @@ export function Handovers() {
     const chosen = [...selected.values()].sort((a, b) => a.no.localeCompare(b.no, undefined, { numeric: true }));
     if (chosen.length === 0) return;
     flushSync(() => setPrintItems(chosen));
-    const cleanup = () => {
-      document.body.classList.remove('printing-handover');
-      window.removeEventListener('afterprint', cleanup);
-      setPrintItems(null);
-    };
-    document.body.classList.add('printing-handover');
-    window.addEventListener('afterprint', cleanup);
-    setPrintPageSize(HANDOVER_PAGE_CSS);
-    window.print();
+    printHandoverSheets(() => setPrintItems(null));
   }
 
   return (
     <div>
       <div className="page-head manage-head">
-        <h2>Phiếu bàn giao</h2>
+        <h2>{t('hvp.title')}</h2>
         <div className="manage-actions">
           <button className="btn-primary" type="button" onClick={printSelected} disabled={selected.size === 0}>
-            {selected.size > 0 ? `In ${selected.size} phiếu đã chọn` : 'In phiếu đã chọn'}
+            {selected.size > 0 ? t('hvp.printSelected', { count: selected.size }) : t('hvp.printSelectedNone')}
           </button>
-          {selected.size > 0 && <button className="btn-secondary" type="button" onClick={() => setSelected(new Map())}>Bỏ chọn</button>}
+          {selected.size > 0 && <button className="btn-secondary" type="button" onClick={() => setSelected(new Map())}>{t('hvp.clearSelection')}</button>}
         </div>
       </div>
 
       <div className="toolbar">
         <input
-          placeholder="Tìm theo số phiếu, họ tên, serial, model, tên máy..."
+          placeholder={t('hvp.search')}
           value={search}
           onChange={(event) => { setPage(1); setSearch(event.target.value); }}
         />
@@ -116,17 +113,17 @@ export function Handovers() {
           <thead>
             <tr>
               <th><input type="checkbox" checked={allOnPageSelected} onChange={toggleAll} /></th>
-              <th className="action-col">Action</th>
-              <th>Số phiếu</th>
-              <th>Ngày lập</th>
-              <th>Họ tên</th>
-              <th>Mã NV</th>
-              <th>Bộ phận</th>
-              <th>Computer name</th>
-              <th>Serial</th>
-              <th>Model</th>
-              <th>Người lập</th>
-              <th>Lưu lúc</th>
+              <th className="action-col">{t('hvp.col.action')}</th>
+              <th>{t('hvp.col.no')}</th>
+              <th>{t('hvp.col.date')}</th>
+              <th>{t('hvp.col.name')}</th>
+              <th>{t('hvp.col.employeeId')}</th>
+              <th>{t('hvp.col.department')}</th>
+              <th>{t('hvp.col.computer')}</th>
+              <th>{t('hvp.col.serial')}</th>
+              <th>{t('hvp.col.model')}</th>
+              <th>{t('hvp.col.by')}</th>
+              <th>{t('hvp.col.savedAt')}</th>
             </tr>
           </thead>
           <tbody>
@@ -135,30 +132,30 @@ export function Handovers() {
                 <td><input type="checkbox" checked={selected.has(item.no)} onChange={() => toggleOne(item)} /></td>
                 <td className="action-col">
                   <div className="row-actions">
-                    <button type="button" className="print-now-action" onClick={() => setOpenItem(item)}>Mở / In lại</button>
-                    {isAdmin && <button type="button" onClick={() => handleDelete(item)}>Xoá</button>}
+                    <button type="button" className="print-now-action" onClick={() => setOpenItem(item)}>{t('hvp.openReprint')}</button>
+                    {isAdmin && <button type="button" onClick={() => handleDelete(item)}>{t('common.delete')}</button>}
                   </div>
                 </td>
-                <td className="mono">{item.no}</td>
-                <td>{item.data?.register_date || '—'}</td>
-                <td>{item.full_name || '—'}</td>
-                <td>{item.data?.employee_id || '—'}</td>
-                <td>{item.data?.department || '—'}</td>
-                <td>{item.data?.computer_name || '—'}</td>
-                <td className="mono">{item.device_ma || item.data?.service_tag || '—'}</td>
-                <td>{item.data?.model || '—'}</td>
-                <td>{item.printed_by || '—'}</td>
-                <td>{formatDateTime(item.created_at)}</td>
+                <td className="mono" data-label={t('hvp.col.no')}>{item.no}</td>
+                <td data-label={t('hvp.col.date')}>{item.data?.register_date || '—'}</td>
+                <td data-label={t('hvp.col.name')}>{item.full_name || '—'}</td>
+                <td data-label={t('hvp.col.employeeId')}>{item.data?.employee_id || '—'}</td>
+                <td data-label={t('hvp.col.department')}>{item.data?.department || '—'}</td>
+                <td data-label={t('hvp.col.computer')}>{item.data?.computer_name || '—'}</td>
+                <td className="mono" data-label={t('hvp.col.serial')}>{item.device_ma || item.data?.service_tag || '—'}</td>
+                <td data-label={t('hvp.col.model')}>{item.data?.model || '—'}</td>
+                <td data-label={t('hvp.col.by')}>{item.printed_by || '—'}</td>
+                <td data-label={t('hvp.col.savedAt')}>{formatDateTime(item.created_at, locale)}</td>
               </tr>
             ))}
             {items.length === 0 && (
-              <tr><td colSpan="12" className="hv-empty-row">{search ? 'Không có phiếu nào khớp tìm kiếm.' : 'Chưa có phiếu bàn giao nào. Vào trang Thiết bị, bấm "Phiếu BG" ở một thiết bị để tạo phiếu.'}</td></tr>
+              <tr><td colSpan="12" className="hv-empty-row">{search ? t('hvp.emptySearch') : t('hvp.empty')}</td></tr>
             )}
           </tbody>
         </table>
       </div>
 
-      <Pager page={page} pageSize={pageSize} total={total} totalPages={totalPages} unit="phiếu" onPage={setPage} onPageSize={(size) => { setPage(1); setPageSize(size); }} />
+      <Pager page={page} pageSize={pageSize} total={total} totalPages={totalPages} unit={t('unit.slips')} onPage={setPage} onPageSize={(size) => { setPage(1); setPageSize(size); }} />
 
       {openItem && (
         <HandoverModal key={openItem.no} saved={openItem} onClose={() => { setOpenItem(null); fetchItems(); }} />

@@ -1,0 +1,36 @@
+# Cấu hình nginx của từng bộ web (blue/green). ${BACKEND_HOST} được thay bằng backend-blue / backend-green.
+server {
+  listen 80;
+  server_name _;
+  root /usr/share/nginx/html;
+  index index.html;
+
+  location /api/ {
+    proxy_pass http://${BACKEND_HOST}:4000/api/;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+    # Đồng bộ GLPI có thể chạy lâu.
+    proxy_read_timeout 300s;
+  }
+
+  # File build có mã băm trong tên nên cache lâu được; index.html thì luôn hỏi lại để nhận bản mới ngay sau khi chuyển.
+  location /assets/ {
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+    try_files $uri =404;
+  }
+
+  location = /index.html {
+    add_header Cache-Control "no-cache";
+  }
+
+  # SPA fallback: mọi route không khớp file tĩnh trả về index.html
+  location / {
+    add_header Cache-Control "no-cache";
+    try_files $uri $uri/ /index.html;
+  }
+}

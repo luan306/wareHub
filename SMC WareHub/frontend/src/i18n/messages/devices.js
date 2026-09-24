@@ -1,0 +1,87 @@
+// Trang Thiết bị: bảng, hàng đợi in tem, form thêm/sửa, đồng bộ GLPI, tạo phiếu hàng loạt.
+export const devices = {
+  'dev.title': ['Quản lý thiết bị', 'Device management'],
+  'dev.exportInventory': ['Xuất kho (CSV)', 'Export Inventory'],
+  'dev.exporting': ['Đang xuất...', 'Exporting...'],
+  'dev.syncGlpi': ['Đồng bộ từ GLPI', 'Sync from GLPI'],
+  'dev.syncing': ['Đang đồng bộ...', 'Syncing...'],
+  'dev.addNew': ['Thêm mới', 'Add New'],
+  'dev.createSlips': ['Tạo phiếu bàn giao', 'Create handover slips'],
+  'dev.creatingSlips': ['Đang tạo phiếu...', 'Creating slips...'],
+  'dev.printLabelList': ['In tem', 'Print Label List'],
+  'dev.searchPlaceholder': ['Tìm theo serial, tên máy, phòng ban, user, IP...', 'Search by serial, device name, department, user, IP...'],
+  'dev.allTypes': ['Tất cả loại', 'All types'],
+  'dev.columnsHint': ['Bấm chuột phải để ẩn/hiện cột', 'Right-click to show/hide columns'],
+  'dev.action': ['Thao tác', 'Action'],
+  'dev.empty': ['Chưa có thiết bị nào', 'No devices yet'],
+  'dev.printing': ['Đang in...', 'Printing...'],
+  'dev.printNow': ['In ngay', 'Print now'],
+  'dev.slip': ['Phiếu BG', 'Slip'],
+  'dev.clone': ['Clone', 'Clone'],
+  'dev.showColumns': ['Hiện cột', 'Show columns'],
+  'dev.showAll': ['Hiện tất cả', 'Show all'],
+
+  'dev.confirmDelete': ['Xoá thiết bị "{name}" ({code})?', 'Delete device "{name}" ({code})?'],
+  'dev.confirmSync': [
+    'Đồng bộ máy tính và điện thoại từ GLPI vào WareHub? Thiết bị đã có (khớp Serial Number) sẽ được cập nhật, thiết bị mới sẽ được thêm vào.',
+    'Sync computers and phones from GLPI into WareHub? Existing devices (matching Serial Number) will be updated and new devices will be added.',
+  ],
+  'dev.syncDone': ['Đồng bộ xong: {created} thiết bị mới, {updated} cập nhật, {unchanged} không đổi.', 'Sync finished: {created} new, {updated} updated, {unchanged} unchanged.'],
+  'dev.syncFetched': ['Lấy từ GLPI: {computers} máy tính, {phones} điện thoại.', 'Fetched from GLPI: {computers} computers, {phones} phones.'],
+  'dev.syncSkipped': ['{count} bỏ qua (thiếu Serial Number).', '{count} skipped (missing Serial Number).'],
+  'dev.syncDuplicates': ['{count} bỏ qua (trùng Serial Number).', '{count} skipped (duplicate Serial Number).'],
+  'dev.syncPhoneError': ['Không lấy được điện thoại: {error}', 'Could not fetch phones: {error}'],
+  'dev.bulkTooMany': [
+    'Chỉ được tạo tối đa {max} phiếu trong một lượt. Bạn đang chọn {count} thiết bị — vui lòng chia nhỏ ra nhiều lượt.',
+    'You can create at most {max} slips at a time. You selected {count} devices — please split them into several batches.',
+  ],
+  'dev.bulkConfirm': [
+    'Tạo và lưu {count} phiếu bàn giao — mỗi thiết bị đã chọn 1 phiếu riêng, họ tên/bộ phận lấy theo thông tin thiết bị?',
+    'Create and save {count} handover slips — one slip per selected device, with the name/department taken from the device?',
+  ],
+
+  'dev.queueAdded': ['Đã thêm {count} thiết bị vào hàng đợi in.', 'Added {count} devices to the print queue.'],
+  'dev.printTooMany': [
+    'Chỉ được chọn tối đa {max} thiết bị trong một lượt in. Bạn đang chọn {count} thiết bị — vui lòng chia nhỏ ra nhiều lượt.',
+    'You can select at most {max} devices per print run. You selected {count} devices — please split them into several runs.',
+  ],
+  'dev.mixedKho': [
+    'Bạn đang chọn lẫn cả tem 12mm và 24mm. Vui lòng chỉ chọn một khổ tem trong một lượt.',
+    'You selected both 12mm and 24mm labels. Please select only one label size per run.',
+  ],
+  'dev.queueTooMany': [
+    'Hàng đợi in hiện có {queue} thiết bị, thêm {incoming} thiết bị nữa sẽ vượt quá giới hạn {max} thiết bị/lượt in. Vui lòng in hàng đợi hiện tại trước hoặc chọn ít hơn.',
+    'The print queue already has {queue} devices; adding {incoming} more would exceed the limit of {max} devices per run. Please print the current queue first or select fewer.',
+  ],
+
+  'print.title': ['In tem', 'Print Label'],
+  'print.review': ['Xem lại', 'Review'],
+  'print.close': ['Đóng', 'Close'],
+  'print.remove': ['Bỏ {code}', 'Remove {code}'],
+  'print.removeFromQueue': ['Bỏ khỏi hàng đợi', 'Remove from queue'],
+  'print.noLabels': ['Chưa có tem nào để in.', 'No labels to print yet.'],
+  'print.deleteSelected': ['Bỏ các mục đã chọn', 'Delete Selected Items'],
+  'print.clearAll': ['Xoá hết', 'Clear all'],
+  'print.print': ['In', 'Print'],
+  'print.printing': ['Đang in...', 'Printing...'],
+
+  'kho.conflictTitle': ['Khác khổ tem', 'Different label size'],
+  'kho.conflictText': [
+    'Không thể gộp hai khổ tem trong cùng một lượt in. Hàng đợi hiện tại sẽ bị xoá nếu bạn tiếp tục.',
+    'Two label sizes cannot be combined in one print run. The current queue will be cleared if you continue.',
+  ],
+  'kho.waiting': ['{count} thiết bị đang chờ in', '{count} devices waiting to print'],
+  'kho.justSelected': ['{count} thiết bị vừa chọn', '{count} devices just selected'],
+  'kho.replace': ['Xoá hàng đợi cũ & thêm mới', 'Clear old queue & add new'],
+
+  'form.add': ['Thêm', 'Add'],
+  'form.update': ['Cập nhật', 'Update'],
+  'form.clone': ['Nhân bản', 'Clone'],
+  'form.section': ['Thông tin thiết bị', 'Equipment Information'],
+
+  'label.modalTitle': ['In tem', 'Print Label'],
+  'label.printDate': ['Ngày in mã QR', 'QR Code Printing Date'],
+  'label.review': ['Xem lại', 'Review'],
+  'label.close': ['Đóng', 'Close'],
+  'label.print': ['In', 'Print'],
+};

@@ -1,6 +1,8 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { PrintQueueProvider } from './context/PrintQueueContext';
+import { ConnectionProvider } from './context/ConnectionContext';
+import { ConnectionStatus } from './components/ConnectionStatus';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
@@ -12,6 +14,8 @@ import { Users } from './pages/Users';
 export default function App() {
   return (
     <AuthProvider>
+      <ConnectionProvider>
+      <ConnectionStatus />
       <PrintQueueProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
@@ -46,6 +50,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/thiet-bi" replace />} />
         </Routes>
       </PrintQueueProvider>
+      </ConnectionProvider>
     </AuthProvider>
   );
 }

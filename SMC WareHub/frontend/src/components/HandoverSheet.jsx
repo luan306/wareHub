@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { api } from '../api/client';
-import { setPrintPageSize, HANDOVER_PAGE_CSS } from '../utils/printPageSize';
+import { printHandoverSheets } from '../utils/printPageSize';
+import { LOAI_LABELS } from '../utils/deviceTypes';
+import { useT } from '../i18n';
 import smcLogo from '../img/Logo_SMC_Corporation.svg';
 
 const FORM_CODE = 'ITFGE-00459_19_A';
+const FORM_CODE_PHONE = 'ITFGE-00459_20_A';
 
 const RESPONSIBILITIES = [
   'End User must protect devices carefully and avoid losing term.',
@@ -18,7 +21,10 @@ const RESPONSIBILITIES = [
   'Any missing or different components will be fine as their prices in the present.',
 ];
 
-const LOAI_LABELS = { laptop: 'Laptop', tablet: 'Tablet', pda: 'PDA', monitor: 'Màn hình', phone: 'Điện thoại' };
+// Phiếu bàn giao điện thoại: cùng mẫu nhưng bỏ 2 điều khoản về phần cứng/phần mềm của máy tính.
+const PHONE_RESPONSIBILITIES = RESPONSIBILITIES.filter(
+  (item) => typeof item !== 'string' || !/mustn't (change the hardware|install any software)/.test(item),
+);
 
 function isoToday() {
   const d = new Date();
@@ -32,7 +38,10 @@ function formatDayMonthYear(iso) {
 }
 
 export function buildHandoverData(device) {
+  const isPhone = device.loai === 'phone';
   return {
+    // 'phone' dùng mẫu phiếu điện thoại; phiếu cũ đã lưu không có trường này nên vẫn là mẫu máy tính.
+    kind: isPhone ? 'phone' : 'computer',
     register_date: isoToday(),
     no: '',
     full_name: device.user_name || '',
@@ -44,17 +53,26 @@ export function buildHandoverData(device) {
     storage: device.storage || '',
     ram: device.ram || '',
     cpu: device.cpu || '',
-    adapter: 'Adapter Dell 65W',
+    adapter: isPhone ? 'SAMSUNG Fast Charge Adapter' : 'Adapter Dell 65W',
+    phone_number: 'N/A',
     windows: 'Win 11 Professional',
     office: 'Office 365',
     ip: device.ip_address || '',
     peripherals: 'Wire Mouse and Keyboard',
     model: device.model || '',
     other: 'N/A',
-    // Danh sách thiết bị đính kèm khi 1 người nhận nhiều thiết bị cùng lúc — không in lên phiếu,
-    // chỉ dùng để xuất file Excel riêng đính kèm theo phiếu giấy (không đụng tới ô Other devices).
+    // Danh sách thiết bị đính kèm khi 1 người nhận nhiều thiết bị cùng lúc — in thành 1 trang riêng ngay sau
+    // phiếu chính (không đụng tới ô Other devices trên phiếu).
     attachments: [],
   };
+}
+
+// Phiếu điện thoại cấp nhiều máy: ô IME/SN chỉ ghi "refer the attached file (N ea)", số lượng gồm cả máy chính
+// (danh sách đính kèm của phiếu điện thoại cũng liệt kê máy chính ở dòng đầu để khớp N).
+function phoneAttachmentRows(data) {
+  const extra = data.attachments || [];
+  if (data.kind !== 'phone' || extra.length === 0) return extra;
+  return [{ id: 'main', ten: data.computer_name, ma: data.service_tag, loai: 'phone', model: data.model }, ...extra];
 }
 
 function Label({ en, vi }) {
@@ -67,6 +85,8 @@ function Label({ en, vi }) {
 }
 
 export function HandoverSheet({ data }) {
+  const isPhone = data.kind === 'phone';
+  const responsibilities = isPhone ? PHONE_RESPONSIBILITIES : RESPONSIBILITIES;
   return (
     <div className="hv-sheet">
       <div className="hv-head">
@@ -75,7 +95,7 @@ export function HandoverSheet({ data }) {
           <h1>MINUTES OF EQUIPMENT HANDOVER</h1>
           <p>PHIẾU BÀN GIAO THIẾT BỊ</p>
         </div>
-        <div className="hv-formno">管理No: {FORM_CODE}</div>
+        <div className="hv-formno">管理No: {isPhone ? FORM_CODE_PHONE : FORM_CODE}</div>
       </div>
 
       <div className="hv-reg">
@@ -102,6 +122,18 @@ export function HandoverSheet({ data }) {
       </table>
 
       <div className="hv-band">DETAILS INFORMATION</div>
+      {isPhone ? (
+        <table className="hv-details hv-details-phone">
+          <colgroup><col style={{ width: '43%' }} /><col style={{ width: '57%' }} /></colgroup>
+          <tbody>
+            <tr><th>MODEL</th><td className="hv-center">{data.model}</td></tr>
+            <tr><th>IME/SN</th><td className="hv-center">{(data.attachments || []).length > 0 ? `refer the attached file (${phoneAttachmentRows(data).length} ea)` : data.service_tag}</td></tr>
+            <tr><th>MOBILE PHONE NUMBER</th><td className="hv-center">{data.phone_number}</td></tr>
+            <tr><th>ADAPTER</th><td className="hv-center">{data.adapter}</td></tr>
+            <tr><th>OTHER DEVICES</th><td className="hv-center">{data.other}</td></tr>
+          </tbody>
+        </table>
+      ) : (
       <table className="hv-details">
         <colgroup><col style={{ width: '30%' }} /><col style={{ width: '20%' }} /><col style={{ width: '50%' }} /></colgroup>
         <tbody>
@@ -125,6 +157,7 @@ export function HandoverSheet({ data }) {
           <tr><td className="hv-center hv-sub">Other devices</td><td className="hv-center">{data.other}</td></tr>
         </tbody>
       </table>
+      )}
 
       <div className="hv-band hv-band-gap">ASSET MANAGEMENT POLICY</div>
       <table className="hv-policy">
@@ -134,7 +167,7 @@ export function HandoverSheet({ data }) {
             <th>Responsibilities</th>
             <td>
               <ul>
-                {RESPONSIBILITIES.map((item, index) => (
+                {responsibilities.map((item, index) => (
                   <li key={index}>{typeof item === 'string' ? item : <b>{item.bold}</b>}</li>
                 ))}
               </ul>
@@ -187,7 +220,7 @@ export function HandoverSheet({ data }) {
 // Trang kèm theo phiếu chính khi 1 người nhận nhiều thiết bị — cùng khổ A4, cùng phong cách (logo,
 // tiêu đề song ngữ, bảng viền đen) để in nối liền sau phiếu chính, không phải file rời.
 export function AttachmentSheet({ data }) {
-  const attachments = data.attachments || [];
+  const attachments = phoneAttachmentRows(data);
   return (
     <div className="hv-sheet hv-attach-sheet">
       <div className="hv-head">
@@ -231,26 +264,31 @@ export function AttachmentSheet({ data }) {
 const WINDOWS_OPTIONS = ['Win 11 Professional', 'Win 10 Professional'];
 const OFFICE_OPTIONS = ['Office 365', 'Office 2016', 'Office 2019', 'Office 2024'];
 const ADAPTER_OPTIONS = ['Adapter Dell 65W', 'PSU C13'];
+const PHONE_ADAPTER_OPTIONS = ['SAMSUNG Fast Charge Adapter', 'N/A'];
 const PERIPHERALS_OPTIONS = ['Wire Mouse and Keyboard', 'Wireless Dell', 'N/A'];
 
-const FIELD_GROUPS = [
+const INFO_GROUPS = [
   {
-    title: 'Thông tin phiếu',
+    titleKey: 'hv.group.slip',
     fields: [
-      ['register_date', 'Ngày lập biên bản', 'date'],
-      ['transfer_date', 'Ngày giao nhận', 'date'],
+      ['register_date', 'hv.f.register_date', 'date'],
+      ['transfer_date', 'hv.f.transfer_date', 'date'],
     ],
   },
   {
-    title: 'Người nhận',
+    titleKey: 'hv.group.recipient',
     fields: [
-      ['full_name', 'Họ tên'],
-      ['employee_id', 'Mã số nhân viên'],
-      ['department', 'Nhà máy / Bộ phận'],
+      ['full_name', 'hv.f.full_name'],
+      ['employee_id', 'hv.f.employee_id'],
+      ['department', 'hv.f.department'],
     ],
   },
+];
+
+const COMPUTER_FIELD_GROUPS = [
+  ...INFO_GROUPS,
   {
-    title: 'Thiết bị',
+    titleKey: 'hv.group.device',
     fields: [
       ['computer_name', 'Computer name'],
       ['service_tag', 'Service tag (Serial)'],
@@ -262,12 +300,26 @@ const FIELD_GROUPS = [
     ],
   },
   {
-    title: 'Bản quyền & thiết bị khác',
+    titleKey: 'hv.group.licenses',
     fields: [
       ['windows', 'License - Windows', 'select', WINDOWS_OPTIONS],
       ['office', 'License - Office', 'select', OFFICE_OPTIONS],
       ['ip', 'IP Address'],
       ['peripherals', 'Mouse/Keyboard', 'select', PERIPHERALS_OPTIONS],
+      ['other', 'Other devices'],
+    ],
+  },
+];
+
+const PHONE_FIELD_GROUPS = [
+  ...INFO_GROUPS,
+  {
+    titleKey: 'hv.group.device',
+    fields: [
+      ['model', 'Model'],
+      ['service_tag', 'IME/SN'],
+      ['phone_number', 'Mobile phone number'],
+      ['adapter', 'Adapter', 'select', PHONE_ADAPTER_OPTIONS],
       ['other', 'Other devices'],
     ],
   },
@@ -300,146 +352,151 @@ export function mergeSpecs(current, source, { overwrite }) {
   return next;
 }
 
-function HandoverPicker({ initialSearch, excludeNo, onPick, onCancel }) {
-  const [search, setSearch] = useState(initialSearch || '');
+// Hộp thoại chọn dùng chung: gõ để tìm (chờ 250ms sau lần gõ cuối), danh sách kết quả, báo lỗi/rỗng.
+// load(search) trả về Promise<mảng>; bỏ qua kết quả của lần tìm đã bị thay thế.
+function usePickerSearch(initialSearch, load) {
+  const [search, setSearch] = useState(initialSearch);
   const [rows, setRows] = useState(null);
   const [error, setError] = useState('');
+  const loadRef = useRef(load);
+  loadRef.current = load;
 
   useEffect(() => {
     let cancelled = false;
     const timer = setTimeout(() => {
-      api.get('/handovers', { search, page: 1, pageSize: 20 })
-        .then((result) => { if (!cancelled) { setRows(result.handovers.filter((item) => item.no !== excludeNo)); setError(''); } })
+      loadRef.current(search)
+        .then((result) => { if (!cancelled) { setRows(result); setError(''); } })
         .catch((err) => { if (!cancelled) setError(err.message); });
     }, 250);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [search, excludeNo]);
+  }, [search]);
 
+  return { search, setSearch, rows, error };
+}
+
+function PickerDialog({ title, help, placeholder, emptyText, picker, onCancel, renderRow }) {
+  const { t } = useT();
+  const { search, setSearch, rows, error } = picker;
   return (
     <div className="hv-picker-backdrop">
-      <div className="hv-picker" role="dialog" aria-label="Clone từ phiếu khác">
+      <div className="hv-picker" role="dialog" aria-label={title}>
         <div className="hv-picker-head">
-          <b>Clone thông số từ phiếu đã lưu</b>
-          <button type="button" className="btn-close" aria-label="Close" onClick={onCancel}>×</button>
+          <b>{title}</b>
+          <button type="button" className="btn-close" aria-label={t('common.close')} onClick={onCancel}>×</button>
         </div>
-        <p className="hv-picker-help">
-          Chỉ lấy thông số thiết bị: CPU, RAM, ổ cứng, adapter, license, chuột/phím, thiết bị khác.
-          Họ tên, mã NV, serial, tên máy và IP của thiết bị này được giữ nguyên.
-        </p>
-        <input className="form-control" autoFocus placeholder="Tìm theo model, số phiếu, tên, serial..." value={search} onChange={(event) => setSearch(event.target.value)} />
+        <p className="hv-picker-help">{help}</p>
+        <input className="form-control" autoFocus placeholder={placeholder} value={search} onChange={(event) => setSearch(event.target.value)} />
         <div className="hv-picker-list">
           {error && <div className="hv-error">{error}</div>}
-          {!error && rows === null && <div className="hv-picker-empty">Đang tải...</div>}
-          {!error && rows && rows.length === 0 && <div className="hv-picker-empty">Không có phiếu nào khớp.</div>}
-          {rows && rows.map((item) => (
-            <button type="button" key={item.no} className="hv-picker-row" onClick={() => onPick(item)}>
-              <span className="hv-picker-no">{item.no}</span>
-              <span className="hv-picker-main">
-                <b>{item.data?.model || '—'}</b>
-                <small>{[item.data?.cpu, item.data?.ram, item.data?.storage].filter(Boolean).join(' · ') || 'Chưa có thông số'}</small>
-              </span>
-              <span className="hv-picker-who">{item.full_name || item.device_ma || ''}</span>
-            </button>
-          ))}
+          {!error && rows === null && <div className="hv-picker-empty">{t('common.loading')}</div>}
+          {!error && rows && rows.length === 0 && <div className="hv-picker-empty">{emptyText}</div>}
+          {rows && rows.map(renderRow)}
         </div>
       </div>
     </div>
+  );
+}
+
+function PickerRow({ no, title, subtitle, who, onClick }) {
+  return (
+    <button type="button" className="hv-picker-row" onClick={onClick}>
+      <span className="hv-picker-no">{no}</span>
+      <span className="hv-picker-main">
+        <b>{title}</b>
+        <small>{subtitle}</small>
+      </span>
+      <span className="hv-picker-who">{who}</span>
+    </button>
+  );
+}
+
+function HandoverPicker({ initialSearch, excludeNo, onPick, onCancel }) {
+  const { t } = useT();
+  const picker = usePickerSearch(initialSearch || '', (search) => (
+    api.get('/handovers', { search, page: 1, pageSize: 20 }).then((result) => result.handovers.filter((item) => item.no !== excludeNo))
+  ));
+  return (
+    <PickerDialog
+      title={t('hv.pick.cloneTitle')}
+      help={t('hv.pick.cloneHelp')}
+      placeholder={t('hv.pick.clonePlaceholder')}
+      emptyText={t('hv.pick.cloneEmpty')}
+      picker={picker}
+      onCancel={onCancel}
+      renderRow={(item) => (
+        <PickerRow
+          key={item.no}
+          no={item.no}
+          title={item.data?.model || '—'}
+          subtitle={[item.data?.cpu, item.data?.ram, item.data?.storage].filter(Boolean).join(' · ') || t('hv.pick.noSpecs')}
+          who={item.full_name || item.device_ma || ''}
+          onClick={() => onPick(item)}
+        />
+      )}
+    />
   );
 }
 
 // Máy bàn thường kèm màn hình rời — màn hình đã là 1 loại thiết bị có sẵn trong hệ thống (loai: monitor),
 // nên tìm theo Serial của chính nó thay vì phải gõ tay model/hãng.
 function MonitorPicker({ onPick, onCancel }) {
-  const [search, setSearch] = useState('');
-  const [rows, setRows] = useState(null);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      api.get('/devices', { search, loai: 'monitor', page: 1, pageSize: 20 })
-        .then((result) => { if (!cancelled) { setRows(result.devices); setError(''); } })
-        .catch((err) => { if (!cancelled) setError(err.message); });
-    }, 250);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [search]);
-
+  const { t } = useT();
+  const picker = usePickerSearch('', (search) => (
+    api.get('/devices', { search, loai: 'monitor', page: 1, pageSize: 20 }).then((result) => result.devices)
+  ));
   return (
-    <div className="hv-picker-backdrop">
-      <div className="hv-picker" role="dialog" aria-label="Thêm màn hình theo Serial">
-        <div className="hv-picker-head">
-          <b>Thêm màn hình theo Serial</b>
-          <button type="button" className="btn-close" aria-label="Close" onClick={onCancel}>×</button>
-        </div>
-        <p className="hv-picker-help">Tìm đúng màn hình đã có trong hệ thống (loại "Màn hình") để tự điền vào Other devices, không cần gõ tay model/hãng.</p>
-        <input className="form-control" autoFocus placeholder="Tìm theo serial, tên, model màn hình..." value={search} onChange={(event) => setSearch(event.target.value)} />
-        <div className="hv-picker-list">
-          {error && <div className="hv-error">{error}</div>}
-          {!error && rows === null && <div className="hv-picker-empty">Đang tải...</div>}
-          {!error && rows && rows.length === 0 && <div className="hv-picker-empty">Không có màn hình nào khớp.</div>}
-          {rows && rows.map((item) => (
-            <button type="button" key={item.id} className="hv-picker-row" onClick={() => onPick(item)}>
-              <span className="hv-picker-no">{item.ma}</span>
-              <span className="hv-picker-main">
-                <b>{item.model || item.ten || '—'}</b>
-                <small>{[item.producer, item.ten].filter(Boolean).join(' · ') || 'Chưa có thông tin'}</small>
-              </span>
-              <span className="hv-picker-who">{item.user_name || item.phong_ban || ''}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
+    <PickerDialog
+      title={t('hv.pick.monitorTitle')}
+      help={t('hv.pick.monitorHelp')}
+      placeholder={t('hv.pick.monitorPlaceholder')}
+      emptyText={t('hv.pick.monitorEmpty')}
+      picker={picker}
+      onCancel={onCancel}
+      renderRow={(item) => (
+        <PickerRow
+          key={item.id}
+          no={item.ma}
+          title={item.model || item.ten || '—'}
+          subtitle={[item.producer, item.ten].filter(Boolean).join(' · ') || t('hv.pick.noInfo')}
+          who={item.user_name || item.phong_ban || ''}
+          onClick={() => onPick(item)}
+        />
+      )}
+    />
   );
 }
 
 // Khi 1 người nhận nhiều thiết bị cùng lúc — tìm & thêm bất kỳ loại thiết bị nào (không chỉ màn hình)
-// vào danh sách đính kèm để xuất Excel riêng, tách biệt với ô Other devices trên phiếu.
+// vào danh sách đính kèm (in thành trang riêng sau phiếu), tách biệt với ô Other devices trên phiếu.
 function AttachmentPicker({ excludeIds, onPick, onCancel }) {
-  const [search, setSearch] = useState('');
-  const [rows, setRows] = useState(null);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      api.get('/devices', { search, page: 1, pageSize: 20 })
-        .then((result) => { if (!cancelled) { setRows(result.devices.filter((d) => !excludeIds.has(d.id))); setError(''); } })
-        .catch((err) => { if (!cancelled) setError(err.message); });
-    }, 250);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [search, excludeIds]);
-
+  const { t } = useT();
+  const picker = usePickerSearch('', (search) => (
+    api.get('/devices', { search, page: 1, pageSize: 20 }).then((result) => result.devices.filter((d) => !excludeIds.has(d.id)))
+  ));
   return (
-    <div className="hv-picker-backdrop">
-      <div className="hv-picker" role="dialog" aria-label="Thêm thiết bị đính kèm">
-        <div className="hv-picker-head">
-          <b>Thêm thiết bị đính kèm</b>
-          <button type="button" className="btn-close" aria-label="Close" onClick={onCancel}>×</button>
-        </div>
-        <p className="hv-picker-help">Tìm và thêm các thiết bị khác cấp kèm cho người này (màn hình, điện thoại...) — dùng để xuất file Excel riêng, không in lên phiếu.</p>
-        <input className="form-control" autoFocus placeholder="Tìm theo serial, tên, model..." value={search} onChange={(event) => setSearch(event.target.value)} />
-        <div className="hv-picker-list">
-          {error && <div className="hv-error">{error}</div>}
-          {!error && rows === null && <div className="hv-picker-empty">Đang tải...</div>}
-          {!error && rows && rows.length === 0 && <div className="hv-picker-empty">Không có thiết bị nào khớp.</div>}
-          {rows && rows.map((item) => (
-            <button type="button" key={item.id} className="hv-picker-row" onClick={() => onPick(item)}>
-              <span className="hv-picker-no">{item.ma}</span>
-              <span className="hv-picker-main">
-                <b>{item.model || item.ten || '—'}</b>
-                <small>{[LOAI_LABELS[item.loai], item.producer].filter(Boolean).join(' · ') || 'Chưa có thông tin'}</small>
-              </span>
-              <span className="hv-picker-who">{item.user_name || item.phong_ban || ''}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
+    <PickerDialog
+      title={t('hv.pick.attachTitle')}
+      help={t('hv.pick.attachHelp')}
+      placeholder={t('hv.pick.attachPlaceholder')}
+      emptyText={t('hv.pick.attachEmpty')}
+      picker={picker}
+      onCancel={onCancel}
+      renderRow={(item) => (
+        <PickerRow
+          key={item.id}
+          no={item.ma}
+          title={item.model || item.ten || '—'}
+          subtitle={[LOAI_LABELS[item.loai] && t(`loai.${item.loai}`), item.producer].filter(Boolean).join(' · ') || t('hv.pick.noInfo')}
+          who={item.user_name || item.phong_ban || ''}
+          onClick={() => onPick(item)}
+        />
+      )}
+    />
   );
 }
 
 export function HandoverModal({ device, saved, onClose }) {
+  const { t } = useT();
   const deviceId = saved ? saved.device_id : device?.id;
   const draftEnabled = !saved && deviceId != null;
 
@@ -489,7 +546,7 @@ export function HandoverModal({ device, saved, onClose }) {
       .then((result) => {
         if (cancelled || !result.found || !result.data) return;
         setData((current) => mergeSpecs(current, result.data, { overwrite: false }));
-        if (result.source === 'model') setNotice(`Đã tự điền thông số từ phiếu cùng model (${result.no}).`);
+        if (result.source === 'model') setNotice(t('hv.autoFilled', { no: result.no }));
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -532,7 +589,7 @@ export function HandoverModal({ device, saved, onClose }) {
     setBusy(true);
     try {
       const no = await persist();
-      setNotice(`Đã lưu phiếu ${no}.`);
+      setNotice(t('hv.saved', { no }));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -546,14 +603,7 @@ export function HandoverModal({ device, saved, onClose }) {
     setBusy(true);
     try {
       await persist();
-      const cleanup = () => {
-        document.body.classList.remove('printing-handover');
-        window.removeEventListener('afterprint', cleanup);
-      };
-      document.body.classList.add('printing-handover');
-      window.addEventListener('afterprint', cleanup);
-      setPrintPageSize(HANDOVER_PAGE_CSS);
-      window.print();
+      printHandoverSheets();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -561,22 +611,35 @@ export function HandoverModal({ device, saved, onClose }) {
     }
   }
 
+  // Đọc giá trị trước khi vào updater (React có thể chạy updater sau khi event bị tái sử dụng).
+  function updateField(key, value) {
+    setData((current) => ({ ...current, [key]: value }));
+  }
+
   function handlePick(item) {
     setData((current) => mergeSpecs(current, item.data, { overwrite: true }));
-    setNotice(`Đã lấy thông số từ phiếu ${item.no}. Bấm Lưu hoặc In phiếu để ghi lại.`);
+    setNotice(t('hv.picked', { no: item.no }));
     setPickerOpen(false);
   }
 
   function handleMonitorPick(monitor) {
     const label = `Monitor : ${monitor.model || monitor.ten} (S/N: ${monitor.ma})`;
     setData((current) => ({ ...current, other: current.other ? `${current.other}, ${label}` : label }));
-    setNotice(`Đã thêm màn hình ${monitor.ma} vào Other devices.`);
+    setNotice(t('hv.monitorAdded', { code: monitor.ma }));
     setMonitorPickerOpen(false);
+  }
+
+  // Điền nhanh "Case for <model> (N ea)" cho phiếu điện thoại; N gồm cả máy chính khi có đính kèm. Vẫn sửa tay được.
+  function handleCaseFill() {
+    const count = phoneAttachmentRows(data).length || 1;
+    const text = `Case for ${data.model || '...'}${count > 1 ? ` (${count}ea)` : ''}`;
+    setData((current) => ({ ...current, other: text }));
+    setNotice(t('hv.caseFilled'));
   }
 
   function handleAttachmentPick(item) {
     setData((current) => ({ ...current, attachments: [...(current.attachments || []), item] }));
-    setNotice(`Đã thêm ${item.ma} vào danh sách thiết bị đính kèm.`);
+    setNotice(t('hv.attachAdded', { code: item.ma }));
     setAttachmentPickerOpen(false);
   }
 
@@ -589,53 +652,54 @@ export function HandoverModal({ device, saved, onClose }) {
       <div className="modal-backdrop">
         <div className="modal-card hv-modal">
           <div className="modal-header">
-            <h2 className="modal-title">Phiếu bàn giao thiết bị{saved ? ` — ${saved.no}` : ''}</h2>
-            <button type="button" className="btn-close" aria-label="Close" onClick={handleClose}>×</button>
+            <h2 className="modal-title">{t('hv.title')}{saved ? ` — ${saved.no}` : ''}</h2>
+            <button type="button" className="btn-close" aria-label={t('common.close')} onClick={handleClose}>×</button>
           </div>
           <div className="hv-modal-body">
             <div className="hv-form">
-              {FIELD_GROUPS.map((group) => (
-                <fieldset key={group.title}>
-                  <legend>{group.title}</legend>
+              {(data.kind === 'phone' ? PHONE_FIELD_GROUPS : COMPUTER_FIELD_GROUPS).map((group) => (
+                <fieldset key={group.titleKey}>
+                  <legend>{t(group.titleKey)}</legend>
                   <div className="hv-fields">
                     {group.fields.map(([key, label, type, options]) => (
                       <label key={key} className={key === 'other' ? 'hv-other-field' : undefined}>
-                        {label}
-                        {key === 'other' && <button type="button" className="hv-monitor-btn" onClick={() => setMonitorPickerOpen(true)}>+ Serial màn hình</button>}
+                        {label.startsWith('hv.') ? t(label) : label}
+                        {key === 'other' && data.kind !== 'phone' && <button type="button" className="hv-monitor-btn" onClick={() => setMonitorPickerOpen(true)}>{t('hv.monitorSerial')}</button>}
+                        {key === 'other' && data.kind === 'phone' && <button type="button" className="hv-monitor-btn" onClick={handleCaseFill}>{t('hv.caseByModel')}</button>}
                         {type === 'select' ? (
-                          <select className="form-control" value={data[key]} onChange={(event) => { const { value } = event.target; setData((current) => ({ ...current, [key]: value })); }}>
-                            {options.map((option) => <option key={option} value={option}>{option}</option>)}
+                          <select className="form-control" value={data[key]} onChange={(event) => updateField(key, event.target.value)}>
+                            {(data[key] && !options.includes(data[key]) ? [data[key], ...options] : options).map((option) => <option key={option} value={option}>{option}</option>)}
                           </select>
                         ) : (
-                          <input className="form-control" type={type || 'text'} value={data[key]} onChange={(event) => { const { value } = event.target; setData((current) => ({ ...current, [key]: value })); }} />
+                          <input className="form-control" type={type || 'text'} value={data[key]} onChange={(event) => updateField(key, event.target.value)} />
                         )}
                       </label>
                     ))}
-                    {group.title === 'Thông tin phiếu' && (
+                    {group.titleKey === 'hv.group.slip' && (
                       <label className="hv-no-field">
-                        Số phiếu (No.) — tự cấp
+                        {t('hv.noField')}
                         <input className="form-control" value={data.no} readOnly />
-                        <span className="hv-hint">{issued ? 'Đã có số phiếu này.' : 'Số dự kiến, cấp chính thức khi bấm Lưu hoặc In phiếu.'}</span>
+                        <span className="hv-hint">{issued ? t('hv.noIssued') : t('hv.noPending')}</span>
                       </label>
                     )}
                   </div>
                 </fieldset>
               ))}
               <fieldset>
-                <legend>Thiết bị đính kèm</legend>
-                <p className="hv-attach-help">Khi cấp nhiều thiết bị cho 1 người — thêm vào đây, sẽ tự in thêm 1 trang danh sách này ngay sau phiếu chính khi bấm In phiếu.</p>
+                <legend>{t('hv.group.attachments')}</legend>
+                <p className="hv-attach-help">{t('hv.attachHelp')}{data.kind === 'phone' && t('hv.attachHelpPhone')}</p>
                 {(data.attachments || []).length > 0 && (
                   <ul className="hv-attach-list">
                     {data.attachments.map((item) => (
                       <li key={item.id}>
                         <span className="mono">{item.ma}</span>
-                        <span>{LOAI_LABELS[item.loai] || item.loai}{item.model ? ` · ${item.model}` : ''}</span>
-                        <button type="button" onClick={() => removeAttachment(item.id)} aria-label={`Bỏ ${item.ma}`}>×</button>
+                        <span>{LOAI_LABELS[item.loai] ? t(`loai.${item.loai}`) : item.loai}{item.model ? ` · ${item.model}` : ''}</span>
+                        <button type="button" onClick={() => removeAttachment(item.id)} aria-label={t('hv.removeItem', { code: item.ma })}>×</button>
                       </li>
                     ))}
                   </ul>
                 )}
-                <button type="button" className="btn-secondary" onClick={() => setAttachmentPickerOpen(true)}>+ Thêm thiết bị</button>
+                <button type="button" className="btn-secondary" onClick={() => setAttachmentPickerOpen(true)}>{t('hv.addDevice')}</button>
               </fieldset>
             </div>
             <div className="hv-preview">
@@ -647,10 +711,10 @@ export function HandoverModal({ device, saved, onClose }) {
             {error
               ? <span className="hv-error">{error}</span>
               : notice && <span className="hv-note">{notice}</span>}
-            <button type="button" className="btn-secondary" onClick={() => setPickerOpen(true)} disabled={busy}>Clone từ phiếu khác</button>
-            <button type="button" className="btn-secondary" onClick={handleClose}>Đóng</button>
-            <button type="button" className="btn-secondary hv-save" onClick={handleSave} disabled={busy}>{busy ? 'Đang lưu...' : 'Lưu'}</button>
-            <button type="button" className="btn-primary" onClick={handlePrint} disabled={busy}>In phiếu</button>
+            <button type="button" className="btn-secondary" onClick={() => setPickerOpen(true)} disabled={busy}>{t('hv.cloneFrom')}</button>
+            <button type="button" className="btn-secondary" onClick={handleClose}>{t('common.close')}</button>
+            <button type="button" className="btn-secondary hv-save" onClick={handleSave} disabled={busy}>{busy ? t('hv.saving') : t('common.save')}</button>
+            <button type="button" className="btn-primary" onClick={handlePrint} disabled={busy}>{t('hv.printSlip')}</button>
           </div>
           {pickerOpen && <HandoverPicker initialSearch={device?.model || data.model} excludeNo={allocatedRef.current} onPick={handlePick} onCancel={() => setPickerOpen(false)} />}
           {monitorPickerOpen && <MonitorPicker onPick={handleMonitorPick} onCancel={() => setMonitorPickerOpen(false)} />}
