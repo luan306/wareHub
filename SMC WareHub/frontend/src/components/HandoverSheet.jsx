@@ -54,9 +54,11 @@ export function buildHandoverData(device) {
     ram: device.ram || '',
     cpu: device.cpu || '',
     adapter: isPhone ? 'SAMSUNG Fast Charge Adapter' : 'Adapter Dell 65W',
-    phone_number: 'N/A',
-    windows: 'Win 11 Professional',
-    office: 'Office 365',
+    // Số điện thoại của SIM trong máy (lấy từ GLPI hoặc nhập tay); chưa có thì ghi N/A.
+    phone_number: (isPhone && device.phone_number) || 'N/A',
+    // Lấy theo GLPI khi đã đồng bộ; chưa có thì dùng mặc định của công ty.
+    windows: device.os_name || 'Win 11 Professional',
+    office: device.office_name || 'Office 365',
     ip: device.ip_address || '',
     peripherals: 'Wire Mouse and Keyboard',
     model: device.model || '',

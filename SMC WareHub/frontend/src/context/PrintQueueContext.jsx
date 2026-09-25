@@ -8,7 +8,7 @@ export function PrintQueueProvider({ children }) {
   const addDevices = useCallback((devices) => {
     setQueue((prev) => {
       const existingIds = new Set(prev.map((d) => d.id));
-      const toAdd = devices.filter((d) => d.is_active !== false && !existingIds.has(d.id));
+      const toAdd = devices.filter((d) => !existingIds.has(d.id));
       return [...prev, ...toAdd];
     });
   }, []);

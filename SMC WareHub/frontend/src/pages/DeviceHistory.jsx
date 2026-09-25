@@ -4,7 +4,7 @@ import { useT } from '../i18n';
 import { useReconnect } from '../context/ConnectionContext';
 
 // Trường được ghi trong lịch sử -> khoá dịch (field.<tên trường>).
-const FIELD_KEYS = ['ma', 'ten', 'loai', 'model', 'producer', 'ip_address', 'user_name', 'phong_ban', 'ghi_chu', 'registered_at'];
+const FIELD_KEYS = ['ma', 'ten', 'loai', 'model', 'producer', 'ip_address', 'cpu', 'ram', 'storage', 'os_name', 'office_name', 'phone_number', 'sim_serial', 'user_name', 'phong_ban', 'ghi_chu', 'registered_at'];
 
 function displayValue(value) {
   return value === null || value === undefined || value === '' ? '—' : value;

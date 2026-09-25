@@ -58,32 +58,75 @@ function FitText({ text }) {
 }
 
 // Bản in (tem 60x24mm): #print-area đang display:none nên không đo được chiều rộng thật — FitText sẽ luôn
-// giữ mức tối đa 20px (cỡ cho bản xem trước rộng 500px), tràn ô tem và bị cắt chữ. Ở đây đo độ rộng chữ
-// thật: phần giá trị của tem chỉ rộng khoảng 26.7mm (≈96px sau khi trừ lề).
-const PRINT_TEXT_MAX = 10;
-const PRINT_TEXT_MIN = 6;
-const PRINT_TEXT_WIDTH_PX = 96;
+// giữ mức tối đa 20px (cỡ cho bản xem trước rộng 500px), tràn ô tem và bị cắt chữ. Ở đây tự đo: phần giá trị của
+// tem chỉ rộng khoảng 26.1mm (≈96px sau khi trừ lề).
+const PRINT_TEXT_MAX = 11;
+const PRINT_TEXT_MIN = 6.5;
+const PRINT_TEXT_WIDTH_PX = 95; // cột giá trị 26.8mm trừ lề
+const TAG_FONT_FAMILY = "'Times New Roman', Times, serif"; // phải trùng font-family của .device-label-table td trong CSS
+// Chừa biên: bản in dàn chữ ở độ phân giải máy in và có thể lệch một chút so với số đo trên màn hình.
+const FIT_MARGIN = 0.94;
 
-let measureCtx;
-// Đo độ rộng chữ thật (canvas) để chọn cỡ chữ lớn nhất vẫn nằm gọn 1 dòng; ước lượng theo số ký tự sẽ sai với chữ HOA/số rộng.
-function widthPerPx(text, weight) {
-  try {
-    measureCtx = measureCtx || document.createElement('canvas').getContext('2d');
-    measureCtx.font = `${weight} 100px Inter, sans-serif`;
-    return measureCtx.measureText(text).width / 100;
-  } catch {
-    return Math.max(String(text).length, 1) * 0.66;
+// Đo độ rộng chữ bằng 1 phần tử ẩn trong DOM, ĐÚNG cỡ chữ đang xét: dùng chính bộ máy dàn chữ của trình duyệt
+// (kể cả làm tròn ở cỡ nhỏ và font thực sự đang dùng) nên sát thực tế hơn canvas/ước lượng theo số ký tự.
+let measureEl;
+function measureWidth(text, sizePx, weight = 400, family = 'inherit') {
+  if (!measureEl) {
+    measureEl = document.createElement('span');
+    measureEl.setAttribute('aria-hidden', 'true');
+    measureEl.style.cssText = 'position:absolute;left:-9999px;top:0;visibility:hidden;white-space:nowrap;font-family:inherit;letter-spacing:normal;';
+    document.body.appendChild(measureEl);
   }
+  measureEl.style.fontFamily = family;
+  measureEl.style.fontWeight = String(weight);
+  measureEl.style.fontSize = `${sizePx}px`;
+  measureEl.textContent = text || ' ';
+  return measureEl.getBoundingClientRect().width;
 }
 
-// Cỡ chữ (px) lớn nhất trong [min, max] để text vừa 1 dòng rộng widthPx.
-function fitFontSize(text, widthPx, { min, max, weight = 400 }) {
-  const fit = widthPx / widthPerPx(String(text) || ' ', weight);
-  return Math.min(max, Math.max(min, Math.floor(fit * 0.96 * 10) / 10));
+// Cỡ chữ (px) lớn nhất trong [min, max] để text vừa 1 dòng rộng widthPx (tìm nhị phân, bước 0.1px).
+function fitFontSize(text, widthPx, { min, max, weight = 400, family = 'inherit' }) {
+  const limit = widthPx * FIT_MARGIN;
+  const fits = (size) => measureWidth(text, size, weight, family) <= limit;
+  if (fits(max)) return max;
+  if (!fits(min)) return min;
+  let lo = min;
+  let hi = max;
+  for (let i = 0; i < 8; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (fits(mid)) lo = mid; else hi = mid;
+  }
+  return Math.floor(lo * 10) / 10;
+}
+
+// Font web tải xong sau lúc tính cỡ chữ thì độ rộng đổi: cho các tem tính lại khi font sẵn sàng.
+function useFontsReady() {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!document.fonts?.addEventListener) return undefined;
+    const bump = () => setTick((tick) => tick + 1);
+    document.fonts.addEventListener('loadingdone', bump);
+    return () => document.fonts.removeEventListener('loadingdone', bump);
+  }, []);
+}
+
+// Giống tem mẫu: mọi giá trị dùng CÙNG 1 cỡ chữ; giá trị dài thì xuống dòng (tối đa 2 dòng, hàng tự cao thêm) thay vì
+// thu nhỏ từng ô. Chỉ khi 2 dòng vẫn không đủ mới thu nhỏ chữ. Cỡ chữ < 8.5px khi ép 1 dòng coi là quá bé -> chuyển sang xuống dòng.
+const PRINT_TEXT_BASE = 9.5;
+const PRINT_TEXT_ONE_LINE_MIN = 8.5;
+function printTextSize(text) {
+  const oneLine = fitFontSize(text, PRINT_TEXT_WIDTH_PX, { min: PRINT_TEXT_ONE_LINE_MIN, max: PRINT_TEXT_BASE, family: TAG_FONT_FAMILY });
+  if (measureWidth(text, oneLine, 400, TAG_FONT_FAMILY) <= PRINT_TEXT_WIDTH_PX * FIT_MARGIN) return oneLine;
+  // xuống 2 dòng: dàn chữ theo từ nên chừa ~15% biên
+  const twoLineLimit = PRINT_TEXT_WIDTH_PX * FIT_MARGIN * 2 * 0.85;
+  const width = measureWidth(text, PRINT_TEXT_BASE, 400, TAG_FONT_FAMILY);
+  if (width <= twoLineLimit) return PRINT_TEXT_BASE;
+  return Math.max(PRINT_TEXT_MIN, Math.floor((PRINT_TEXT_BASE * twoLineLimit / width) * 10) / 10);
 }
 
 function PrintText({ text }) {
-  const size = fitFontSize(text, PRINT_TEXT_WIDTH_PX, { min: PRINT_TEXT_MIN, max: PRINT_TEXT_MAX });
+  useFontsReady();
+  const size = printTextSize(text);
   return <div className="print-value-text" style={{ fontSize: `${size.toFixed(1)}px` }}>{text}</div>;
 }
 
@@ -102,9 +145,9 @@ const PHONE_SERIAL_LABEL = 'IME/SN :';
 const PHONE_SERIAL_WIDTH_PX = 63; // cột phải của tem ≈ 16.9mm
 function serialLayout(value) {
   const full = `${PHONE_SERIAL_LABEL} ${value}`;
-  const limit = PHONE_SERIAL_WIDTH_PX * 0.96;
+  const limit = PHONE_SERIAL_WIDTH_PX * FIT_MARGIN;
   for (let size = 10; size >= 5; size -= 0.5) {
-    const fits = (text) => widthPerPx(text, 700) * size <= limit;
+    const fits = (text) => measureWidth(text, size, 700) <= limit;
     if (fits(full)) return { lines: [full], size };
     if (fits(value)) return { lines: [PHONE_SERIAL_LABEL, value], size };
   }
@@ -114,6 +157,7 @@ function serialLayout(value) {
 // Tem điện thoại kiểu Dell (băng 12mm, dài 30mm): QR vector bên trái; bên phải logo SMC nhỏ và dòng IME/SN chữ đậm.
 // Bản in đen trắng thuần dạng vector để máy in Brother không biến thành chấm li ti; bản xem trước giữ logo xanh như tem laptop.
 function PhoneTagBody({ value, preview }) {
+  useFontsReady();
   const { lines, size } = serialLayout(value);
   return (
     <>

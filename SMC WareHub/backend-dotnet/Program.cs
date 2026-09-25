@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http.Json;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.IdentityModel.Tokens;
@@ -21,7 +22,30 @@ var connectionString = configuration.GetConnectionString("Default")
 var jwtSecret = configuration["Jwt:Secret"];
 if (string.IsNullOrWhiteSpace(jwtSecret) || jwtSecret.Length < 32)
     throw new InvalidOperationException("Jwt:Secret phải có tối thiểu 32 ký tự");
+// appsettings.json trong kho mã chứa 1 khoá mẫu ai cũng đọc được; chạy thật mà quên đặt khoá riêng thì kẻ tấn công tự ký được token admin.
+if (builder.Environment.IsProduction()
+    && (new[] { "change", "dev_only", "example", "placeholder" }.Any(w => jwtSecret.Contains(w, StringComparison.OrdinalIgnoreCase)) || jwtSecret.Distinct().Count() < 12))
+    throw new InvalidOperationException("Jwt:Secret đang là giá trị mẫu/yếu. Đặt chuỗi ngẫu nhiên dài (tối thiểu 32 ký tự) bằng biến môi trường Jwt__Secret.");
 
+const string JwtIssuer = "warehub";
+const string JwtAudience = "warehub-web";
+
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.AddServerHeader = false;                              // không khoe "Kestrel" cho người ngoài
+    options.Limits.MaxRequestBodySize = 1_048_576;                // 1MB: mọi yêu cầu của ứng dụng đều nhỏ hơn nhiều
+    options.Limits.MaxRequestHeadersTotalSize = 32 * 1024;
+    options.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(15);
+});
+// Địa chỉ IP thật của người dùng (để khoá đăng nhập theo IP): đọc từ X-Forwarded-For do nginx ghi đè bằng $remote_addr, chỉ tin 1 tầng.
+// Cổng của backend KHÔNG được mở ra ngoài (chỉ nginx gọi vào) — nếu mở, kẻ ngoài có thể tự đặt header này để lẩn tránh khoá.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.ForwardLimit = 1;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
@@ -39,16 +63,22 @@ builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
 builder.Services.Configure<GlpiOptions>(configuration.GetSection(GlpiOptions.SectionName));
 builder.Services.AddHttpClient<GlpiClient>();
 builder.Services.AddSingleton<MaintenanceState>();
+builder.Services.AddSingleton<UserCache>();
+builder.Services.AddSingleton<LoginGuard>();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
 {
     options.TokenValidationParameters = new TokenValidationParameters
     {
         ValidateIssuerSigningKey = true,
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
-        ValidateIssuer = false,
-        ValidateAudience = false,
+        ValidateIssuer = true,
+        ValidIssuer = JwtIssuer,
+        ValidateAudience = true,
+        ValidAudience = JwtAudience,
         ValidateLifetime = true,
-        ClockSkew = TimeSpan.FromMinutes(1)
+        RequireExpirationTime = true,
+        ValidAlgorithms = [SecurityAlgorithms.HmacSha256], // chặn kiểu tấn công đổi thuật toán (alg confusion / alg=none)
+        ClockSkew = TimeSpan.FromSeconds(30)
     };
 });
 builder.Services.AddAuthorization(options => options.AddPolicy("admin", policy => policy.RequireRole("admin")));
@@ -57,12 +87,39 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod()));
 
 var app = builder.Build();
+app.UseForwardedHeaders();
+app.Use(async (context, next) =>
+{
+    var headers = context.Response.Headers;
+    headers["X-Content-Type-Options"] = "nosniff";
+    headers["X-Frame-Options"] = "DENY";
+    headers["Referrer-Policy"] = "no-referrer";
+    headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=(), usb=()";
+    headers["Cross-Origin-Opener-Policy"] = "same-origin";
+    headers["Cross-Origin-Resource-Policy"] = "same-origin";
+    if (context.Request.IsHttps) headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
+    if (context.Request.Path.StartsWithSegments("/api"))
+    {
+        headers["Cache-Control"] = "no-store"; // dữ liệu API không được lưu trong bộ nhớ đệm của trình duyệt/proxy
+        headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'";
+    }
+    await next();
+});
 app.UseResponseCompression();
 app.Use(async (context, next) =>
 {
     try
     {
         await next();
+    }
+    catch (Exception exception) when (exception is BadHttpRequestException or JsonException)
+    {
+        // JSON hỏng, thiếu tham số bắt buộc, quá cỡ...: lỗi của người gọi. Không ghi log lỗi (tránh bị dùng để làm đầy log) và không lộ chi tiết nội bộ.
+        if (!context.Response.HasStarted)
+        {
+            context.Response.StatusCode = exception is BadHttpRequestException bad ? bad.StatusCode : StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsJsonAsync(new { error = context.Response.StatusCode == StatusCodes.Status413PayloadTooLarge ? "Dữ liệu gửi lên quá lớn" : "Yêu cầu không hợp lệ" });
+        }
     }
     catch (Exception exception)
     {
@@ -80,6 +137,9 @@ app.UseAuthentication();
 // đường cần thiết để bật/tắt/kiểm tra (health, trạng thái bảo trì, đăng nhập). Đặt TRƯỚC bước tra cứu người dùng
 // trong DB nên vẫn hoạt động khi đang thao tác trên cơ sở dữ liệu.
 var maintenance = app.Services.GetRequiredService<MaintenanceState>();
+var userCache = app.Services.GetRequiredService<UserCache>();
+// Băm 1 mật khẩu giả cho tài khoản không tồn tại, để thời gian phản hồi đăng nhập không lộ tên nào có thật.
+var dummyUser = new User { PasswordHash = new PasswordHasher<User>().HashPassword(new User(), "dummy-password-used-only-for-timing") };
 app.Use(async (context, next) =>
 {
     var info = maintenance.Current;
@@ -96,16 +156,19 @@ app.Use(async (context, next) =>
 {
     if (context.User.Identity?.IsAuthenticated == true)
     {
-        await using var scope = app.Services.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<WareHubDbContext>();
         var id = context.User.FindFirstValue(JwtRegisteredClaimNames.Sub) ?? context.User.FindFirstValue(ClaimTypes.NameIdentifier);
-        var user = int.TryParse(id, out var userId)
-            ? await db.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == userId)
-            : null;
+        var user = int.TryParse(id, out var userId) ? await userCache.GetAsync(userId, context.RequestAborted) : null;
         if (user is null || !user.IsActive)
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             await context.Response.WriteAsJsonAsync(new { error = "Tài khoản không tồn tại hoặc đã bị khóa" });
+            return;
+        }
+        // Đổi mật khẩu hoặc đổi vai trò làm mọi token đã cấp trước đó mất hiệu lực (kể cả quyền admin đã bị thu hồi).
+        if (!string.Equals(context.User.FindFirstValue("stamp"), SessionStamp(user), StringComparison.Ordinal))
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await context.Response.WriteAsJsonAsync(new { error = "Phiên đăng nhập không còn hiệu lực, vui lòng đăng nhập lại" });
             return;
         }
         context.Items["CurrentUser"] = user;
@@ -134,14 +197,34 @@ app.MapPut("/api/maintenance", (MaintenanceRequest request) =>
 }).RequireAuthorization("admin");
 
 var auth = app.MapGroup("/api/auth");
-auth.MapPost("/login", async (LoginRequest request, WareHubDbContext db, IPasswordHasher<User> hasher, IConfiguration config) =>
+auth.MapPost("/login", async (LoginRequest request, HttpContext context, WareHubDbContext db, IPasswordHasher<User> hasher, IConfiguration config, LoginGuard guard) =>
 {
     var username = request.Username?.Trim();
     if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(request.Password))
         return Results.BadRequest(new { error = "Vui lòng nhập tên đăng nhập và mật khẩu" });
-    var user = await db.Users.SingleOrDefaultAsync(x => x.Username == username);
-    if (user is null || !user.IsActive || !VerifyPassword(user, request.Password, hasher))
+    var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    if (username.Length > 100 || request.Password.Length > PasswordPolicy.MaxLength)
+    {
+        guard.RecordFailure(ip, username[..Math.Min(username.Length, 100)]);
         return Results.Json(new { error = "Sai tên đăng nhập hoặc mật khẩu" }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+    if (guard.RemainingLock(ip, username) is { } wait)
+    {
+        var minutes = Math.Max((int)Math.Ceiling(wait.TotalMinutes), 1);
+        app.Logger.LogWarning("SECURITY login blocked (locked) ip={Ip} user={User}", ip, LogSafe(username));
+        context.Response.Headers.RetryAfter = ((int)Math.Ceiling(wait.TotalSeconds)).ToString();
+        return Results.Json(new { error = $"Đăng nhập sai quá nhiều lần. Vui lòng thử lại sau {minutes} phút." }, statusCode: StatusCodes.Status429TooManyRequests);
+    }
+    var user = await db.Users.SingleOrDefaultAsync(x => x.Username == username);
+    // Tài khoản không tồn tại vẫn phải băm 1 lần mật khẩu: nếu không, thời gian phản hồi ngắn hơn hẳn sẽ lộ tên đăng nhập nào có thật.
+    var passwordOk = VerifyPassword(user ?? dummyUser, request.Password, hasher) && user is not null;
+    if (user is null || !user.IsActive || !passwordOk)
+    {
+        guard.RecordFailure(ip, username);
+        app.Logger.LogWarning("SECURITY login failed ip={Ip} user={User}", ip, LogSafe(username));
+        return Results.Json(new { error = "Sai tên đăng nhập hoặc mật khẩu" }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+    guard.RecordSuccess(ip, username);
     // Đang bảo trì: chỉ admin được vào (để tắt bảo trì); người khác nhận 503 để giao diện hiện màn hình bảo trì.
     if (maintenance.Current is { Enabled: true } info && user.Role != "admin")
         return Results.Json(new { error = info.Message, maintenance = true, until = info.Until }, statusCode: StatusCodes.Status503ServiceUnavailable);
@@ -152,6 +235,7 @@ auth.MapGet("/me", (HttpContext context) => Results.Ok(new { user = UserDto((Use
 var devices = app.MapGroup("/api/devices").RequireAuthorization();
 devices.MapGet("/", async (string? search, string? loai, string? lifecycle_status, string? sortBy, string? sortDir, int? page, int? pageSize, WareHubDbContext db) =>
 {
+    search = ClampText(search, 100);
     var query = db.Devices.AsNoTracking().AsQueryable();
     if (!string.IsNullOrWhiteSpace(search)) query = query.Where(x => x.Ma.Contains(search) || x.Ten.Contains(search) || (x.PhongBan ?? "").Contains(search) || (x.UserName ?? "").Contains(search) || (x.IpAddress ?? "").Contains(search));
     if (!string.IsNullOrWhiteSpace(loai)) query = query.Where(x => x.Loai == loai);
@@ -205,105 +289,117 @@ devices.MapPut("/{id:int}", async (int id, DeviceRequest request, HttpContext co
     await db.SaveChangesAsync();
     return Results.Ok(new { ok = true });
 }).RequireAuthorization("admin");
-devices.MapGet("/history", async (string? search, string? from, string? to, int page, int pageSize, WareHubDbContext db) =>
+devices.MapGet("/history", async (string? search, string? from, string? to, int? page, int? pageSize, WareHubDbContext db) =>
 {
-    page = Math.Max(page, 1); pageSize = Math.Clamp(pageSize == 0 ? 30 : pageSize, 1, 100);
+    var (currentPage, limit) = ParsePaging(page, pageSize, defaultSize: 30);
+    search = ClampText(search, 100);
     var query = db.DeviceHistory.AsNoTracking().AsQueryable();
     if (!string.IsNullOrWhiteSpace(search)) query = query.Where(x => x.Device.Ma.Contains(search) || x.Device.Ten.Contains(search) || x.User.FullName.Contains(search));
     if (DateTime.TryParse(from, out var fromDate)) query = query.Where(x => x.ChangedAt >= fromDate.Date);
     if (DateTime.TryParse(to, out var toDate)) query = query.Where(x => x.ChangedAt < toDate.Date.AddDays(1));
     var total = await query.CountAsync();
-    var rows = await query.OrderByDescending(x => x.ChangedAt).Skip((page - 1) * pageSize).Take(pageSize)
+    var rows = await query.OrderByDescending(x => x.ChangedAt).Skip((currentPage - 1) * limit).Take(limit)
         .Select(x => new { x.Id, changed_at = x.ChangedAt, x.Device.Ma, x.Device.Ten, field_name = x.FieldName, old_value = x.OldValue, new_value = x.NewValue, changed_by = x.User.FullName })
         .ToListAsync();
-    return Results.Ok(new { history = rows, total, page, pageSize });
+    return Results.Ok(new { history = rows, total, page = currentPage, pageSize = limit });
 }).RequireAuthorization("admin");
-devices.MapGet("/glpi-debug", (GlpiClient glpi, IConfiguration config) =>
-{
-    var section = config.GetSection("Glpi");
-    return Results.Ok(new
-    {
-        isConfigured = glpi.IsConfigured,
-        sectionExists = section.Exists(),
-        baseUrlLen = section["BaseUrl"]?.Length ?? -1,
-        clientIdLen = section["ClientId"]?.Length ?? -1,
-        usernameLen = section["Username"]?.Length ?? -1,
-        passwordLen = section["Password"]?.Length ?? -1,
-    });
-}).RequireAuthorization("admin");
+// Kiểm tra kết nối chi tiết GLPI cho 1 máy: /api/devices/glpi-probe?id=<mã máy trong GLPI, thấy trên URL: computer.form.php?id=227>.
+// Trả về đường dẫn đang dùng, phản hồi thô của từng nguồn và giá trị đã đọc được — dùng để chỉnh cấu hình Glpi khi khác bản GLPI.
+devices.MapGet("/glpi-probe", (int id, HttpContext context, GlpiClient glpi) => GlpiProbeAsync(glpi, () => glpi.ProbeComputerAsync(id, context.RequestAborted))).RequireAuthorization("admin");
+devices.MapGet("/glpi-probe-phone", (int id, HttpContext context, GlpiClient glpi) => GlpiProbeAsync(glpi, () => glpi.ProbePhoneAsync(id, context.RequestAborted))).RequireAuthorization("admin");
 devices.MapPost("/glpi-sync", async (HttpContext context, WareHubDbContext db, GlpiClient glpi) =>
 {
-    if (!glpi.IsConfigured)
-        return Results.BadRequest(new { error = "Chưa cấu hình kết nối GLPI. Thêm mục \"Glpi\" (BaseUrl, ClientId, ClientSecret, Username, Password) vào appsettings.Development.json." });
+    if (!glpi.IsConfigured) return GlpiNotConfigured();
+    var ct = context.RequestAborted;
 
-    List<GlpiAsset> computers;
-    try { computers = await glpi.GetComputersAsync(context.RequestAborted); }
-    catch (InvalidOperationException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status502BadGateway); }
-
-    // Lỗi phía điện thoại (vd. sai đường dẫn) không được làm hỏng phần máy tính đã lấy được.
-    List<GlpiAsset> phones = [];
-    string? phoneError = null;
-    try { phones = await glpi.GetPhonesAsync(context.RequestAborted); }
-    catch (InvalidOperationException ex) { phoneError = ex.Message; }
+    // 4 danh sách hỏi song song. Máy tính là bắt buộc; điện thoại/tablet/màn hình lỗi (vd. sai đường dẫn) chỉ báo riêng loại đó,
+    // không làm hỏng phần đã lấy được.
+    var computersTask = TryFetchAsync(() => glpi.GetComputersAsync(ct), ct);
+    var phonesTask = TryFetchAsync(() => glpi.GetPhonesAsync(ct), ct);
+    var tabletsTask = TryFetchAsync(() => glpi.GetTabletsAsync(ct), ct);
+    var monitorsTask = TryFetchAsync(() => glpi.GetMonitorsAsync(ct), ct);
+    var (computers, computerError) = await computersTask;
+    if (computerError is not null) return Results.Problem(computerError, statusCode: StatusCodes.Status502BadGateway);
+    var (phones, phoneError) = await phonesTask;
+    var (tablets, tabletError) = await tabletsTask;
+    var (monitors, monitorError) = await monitorsTask;
 
     var assets = computers.Select(c => (Asset: c, Loai: "laptop", Kho: "24"))
         .Concat(phones.Select(p => (Asset: p, Loai: "phone", Kho: "12")))
+        .Concat(tablets.Select(t => (Asset: t, Loai: "tablet", Kho: "24")))
+        .Concat(monitors.Select(m => (Asset: m, Loai: "monitor", Kho: "24")))
         .ToList();
 
+    // Chi tiết từng máy tính (CPU/RAM/ổ cứng/IP/Windows/Office) và SIM điện thoại: mỗi máy phải hỏi riêng nên chạy song song có giới hạn.
+    // Lỗi ở phần này không làm hỏng việc đồng bộ danh sách; chỉ báo cảnh báo và giữ nguyên giá trị đang có.
+    var detailReport = new GlpiDetailReport();
+    var details = new Dictionary<int, GlpiComputerDetails>();
+    var phoneDetails = new Dictionary<int, GlpiPhoneDetails>();
+    if (glpi.DetailsEnabled && computers.Count > 0)
+    {
+        try { details = await glpi.GetDetailsForComputersAsync(computers.Where(c => !string.IsNullOrWhiteSpace(c.Serial)).Select(c => c.Id), detailReport, ct); }
+        catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException) { detailReport.Warn("all", $"Không lấy được chi tiết máy tính: {ex.Message}"); }
+    }
+    if (glpi.DetailsEnabled && phones.Count > 0)
+    {
+        try { phoneDetails = await glpi.GetDetailsForPhonesAsync(phones.Where(p => !string.IsNullOrWhiteSpace(p.Serial)).Select(p => p.Id), detailReport, ct); }
+        catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException) { detailReport.Warn("sim-all", $"Không lấy được SIM của điện thoại: {ex.Message}"); }
+    }
+    var detailed = 0;
+    // Điền phần chi tiết riêng của từng loại (máy tính: cấu hình; điện thoại: SIM); true nếu GLPI có trả gì đó.
+    bool ApplyExtras(Device device, string loai, int glpiId)
+    {
+        if (loai == "laptop" && details.TryGetValue(glpiId, out var computer) && computer.HasAny) { ApplyDetails(device, computer); return true; }
+        if (loai == "phone" && phoneDetails.TryGetValue(glpiId, out var sim) && sim.HasAny) { ApplyPhoneDetails(device, sim); return true; }
+        return false;
+    }
+
     var currentUser = (User)context.Items["CurrentUser"]!;
-    var existingBySerial = await db.Devices.ToDictionaryAsync(x => x.Ma);
+    // Không phân biệt hoa/thường như MySQL: nếu không, "abc" và "ABC" bị coi là 2 thiết bị, thêm mới rồi vỡ ràng buộc duy nhất.
+    var existingBySerial = await db.Devices.ToDictionaryAsync(x => x.Ma, StringComparer.OrdinalIgnoreCase);
     var seenSerials = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     int created = 0, updated = 0, unchanged = 0, skipped = 0, duplicates = 0;
+    var skippedNames = new List<string>(); // tối đa 20 tên tài sản GLPI thiếu serial, để người dùng biết cần bổ sung ở đâu
 
     foreach (var (c, loai, kho) in assets)
     {
         var serial = Truncate(c.Serial, 50);
-        if (string.IsNullOrWhiteSpace(serial)) { skipped++; continue; }
+        if (string.IsNullOrWhiteSpace(serial))
+        {
+            skipped++;
+            if (skippedNames.Count < 20) skippedNames.Add(Truncate(c.Name, 60) ?? $"GLPI #{c.Id}");
+            continue;
+        }
         if (!seenSerials.Add(serial)) { duplicates++; continue; }
 
         if (existingBySerial.TryGetValue(serial, out var existing))
         {
             var before = SnapshotDevice(existing);
-            existing.Ten = Truncate(c.Name, 150) is { Length: > 0 } newTen ? newTen : existing.Ten;
-            existing.Model = Truncate(c.Model?.Name, 150);
-            existing.Producer = Truncate(c.Manufacturer?.Name, 100);
-            existing.UserName = Truncate(c.User?.Name, 100);
-            existing.PhongBan = Truncate(c.Location?.Name, 100);
-            existing.GhiChu = Truncate(c.Comment, 500);
-            var after = SnapshotDevice(existing);
-            var changes = DiffDevice(before, after);
+            ApplyGlpiAsset(existing, c);
+            if (ApplyExtras(existing, loai, c.Id)) detailed++;
+            var changes = DiffDevice(before, SnapshotDevice(existing));
             RecordDeviceChanges(db, existing.Id, currentUser.Id, changes);
             if (changes.Count > 0) updated++; else unchanged++;
         }
         else
         {
-            db.Devices.Add(new Device
-            {
-                Ma = serial,
-                Ten = Truncate(c.Name, 150) is { Length: > 0 } ten ? ten : serial,
-                Loai = loai,
-                Kho = kho,
-                Model = Truncate(c.Model?.Name, 150),
-                Producer = Truncate(c.Manufacturer?.Name, 100),
-                UserName = Truncate(c.User?.Name, 100),
-                PhongBan = Truncate(c.Location?.Name, 100),
-                GhiChu = Truncate(c.Comment, 500),
-                IsActive = true,
-                LifecycleStatus = "old",
-            });
+            var newDevice = new Device { Ma = serial, Ten = serial, Loai = loai, Kho = kho, IsActive = true, LifecycleStatus = "old" };
+            ApplyGlpiAsset(newDevice, c);
+            if (ApplyExtras(newDevice, loai, c.Id)) detailed++;
+            db.Devices.Add(newDevice);
             created++;
         }
     }
 
     await db.SaveChangesAsync();
-    return Results.Ok(new { ok = true, total = assets.Count, computers = computers.Count, phones = phones.Count, phone_error = phoneError, created, updated, unchanged, skipped, duplicates });
+    return Results.Ok(new { ok = true, total = assets.Count, computers = computers.Count, phones = phones.Count, phone_error = phoneError, tablets = tablets.Count, tablet_error = tabletError, monitors = monitors.Count, monitor_error = monitorError, created, updated, unchanged, skipped, skipped_names = skippedNames, duplicates, detailed, detail_warnings = detailReport.Warnings });
 }).RequireAuthorization("admin");
 devices.MapPost("/{id:int}/clone", async (int id, CloneRequest request, WareHubDbContext db) =>
 {
     if (string.IsNullOrWhiteSpace(request.Ma)) return Results.BadRequest(new { error = "Vui lòng nhập mã thiết bị mới" });
     var source = await db.Devices.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id);
     if (source is null) return Results.NotFound(new { error = "Không tìm thấy thiết bị gốc" });
-    var clone = new Device { Ma = request.Ma.Trim(), Ten = source.Ten, Loai = source.Loai, Kho = source.Kho, Model = source.Model, Cpu = source.Cpu, Ram = source.Ram, Storage = source.Storage, IsActive = true, LifecycleStatus = "old", UserName = source.UserName, RegisteredAt = source.RegisteredAt, PhongBan = source.PhongBan, GhiChu = source.GhiChu, Producer = source.Producer, IpAddress = source.IpAddress };
+    var clone = new Device { Ma = request.Ma.Trim(), Ten = source.Ten, Loai = source.Loai, Kho = source.Kho, Model = source.Model, Cpu = source.Cpu, Ram = source.Ram, Storage = source.Storage, IsActive = true, LifecycleStatus = "old", UserName = source.UserName, RegisteredAt = source.RegisteredAt, PhongBan = source.PhongBan, GhiChu = source.GhiChu, Producer = source.Producer, IpAddress = source.IpAddress, OsName = source.OsName, OfficeName = source.OfficeName };
     db.Devices.Add(clone); try { await db.SaveChangesAsync(); return Results.Created($"/api/devices/{clone.Id}", new { id = clone.Id }); } catch (DbUpdateException) { return Results.Conflict(new { error = $"Mã thiết bị \"{request.Ma}\" đã tồn tại" }); }
 }).RequireAuthorization("admin");
 devices.MapDelete("/{id:int}", async (int id, WareHubDbContext db) =>
@@ -313,31 +409,40 @@ devices.MapDelete("/{id:int}", async (int id, WareHubDbContext db) =>
 }).RequireAuthorization("admin");
 
 var users = app.MapGroup("/api/users").RequireAuthorization("admin");
-users.MapGet("/", async (WareHubDbContext db) => Results.Ok(new { users = await db.Users.AsNoTracking().OrderByDescending(x => x.CreatedAt).ToListAsync() }));
-users.MapPost("/", async (UserCreateRequest request, WareHubDbContext db, IPasswordHasher<User> hasher) =>
+users.MapGet("/", async (WareHubDbContext db) => Results.Ok(new
+{
+    users = await db.Users.AsNoTracking().OrderByDescending(x => x.CreatedAt)
+        .Select(x => new { x.Id, x.Username, x.FullName, x.Role, is_active = x.IsActive, created_at = x.CreatedAt }).ToListAsync(),
+}));
+users.MapPost("/", async (UserCreateRequest request, HttpContext context, WareHubDbContext db, IPasswordHasher<User> hasher) =>
 {
     var username = request.Username?.Trim(); var fullName = request.FullName?.Trim();
     if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(fullName) || string.IsNullOrWhiteSpace(request.Password)) return Results.BadRequest(new { error = "Vui lòng nhập đầy đủ tên đăng nhập, mật khẩu, họ tên" });
     if (username.Length > 50) return Results.BadRequest(new { error = "Tên đăng nhập không được vượt quá 50 ký tự" });
     if (fullName.Length > 100) return Results.BadRequest(new { error = "Họ tên không được vượt quá 100 ký tự" });
-    if (request.Password.Length < 6) return Results.BadRequest(new { error = "Mật khẩu cần tối thiểu 6 ký tự" });
+    if (PasswordPolicy.Validate(request.Password, username) is { } weakPassword) return Results.BadRequest(new { error = weakPassword });
     if (request.Role is not ("admin" or "staff")) return Results.BadRequest(new { error = "Vai trò không hợp lệ" });
     if (await db.Users.AnyAsync(x => x.Username == username)) return Results.Conflict(new { error = $"Tên đăng nhập \"{username}\" đã tồn tại" });
-    var user = new User { Username = username, FullName = fullName, Role = request.Role }; user.PasswordHash = hasher.HashPassword(user, request.Password); db.Users.Add(user); await db.SaveChangesAsync(); return Results.Created($"/api/users/{user.Id}", new { id = user.Id });
+    var user = new User { Username = username, FullName = fullName, Role = request.Role }; user.PasswordHash = hasher.HashPassword(user, request.Password); db.Users.Add(user); await db.SaveChangesAsync(); AuditUserAction(app.Logger, context, "tạo", user.Username, $"vai trò {user.Role}"); return Results.Created($"/api/users/{user.Id}", new { id = user.Id });
 });
-users.MapPut("/{id:int}", async (int id, UserUpdateRequest request, WareHubDbContext db, IPasswordHasher<User> hasher) =>
+users.MapPut("/{id:int}", async (int id, UserUpdateRequest request, HttpContext context, WareHubDbContext db, IPasswordHasher<User> hasher) =>
 {
     var user = await db.Users.FindAsync(id); if (user is null) return Results.NotFound(new { error = "Không tìm thấy người dùng" });
+    // Admin tự hạ quyền/khoá chính mình sẽ làm hệ thống không còn ai quản trị; việc này phải do admin khác làm.
+    if (((User)context.Items["CurrentUser"]!).Id == id && ((request.Role is not null && request.Role != user.Role) || request.IsActive == false))
+        return Results.BadRequest(new { error = "Không thể tự đổi vai trò hoặc tự khoá chính mình" });
     if (request.FullName is not null) { if (string.IsNullOrWhiteSpace(request.FullName)) return Results.BadRequest(new { error = "Họ tên không được để trống" }); user.FullName = request.FullName.Trim(); }
     if (request.Role is not null) { if (request.Role is not ("admin" or "staff")) return Results.BadRequest(new { error = "Vai trò không hợp lệ" }); user.Role = request.Role; }
     if (request.IsActive.HasValue) user.IsActive = request.IsActive.Value;
-    if (!string.IsNullOrWhiteSpace(request.Password)) { if (request.Password.Length < 6) return Results.BadRequest(new { error = "Mật khẩu cần tối thiểu 6 ký tự" }); user.PasswordHash = hasher.HashPassword(user, request.Password); }
-    await db.SaveChangesAsync(); return Results.Ok(new { ok = true });
+    if (!string.IsNullOrWhiteSpace(request.Password)) { if (PasswordPolicy.Validate(request.Password, user.Username) is { } weakPassword) return Results.BadRequest(new { error = weakPassword }); user.PasswordHash = hasher.HashPassword(user, request.Password); }
+    await db.SaveChangesAsync(); userCache.Invalidate(id);
+    AuditUserAction(app.Logger, context, "sửa", user.Username, $"vai trò {user.Role}, hoạt động {user.IsActive}, đặt lại mật khẩu {!string.IsNullOrWhiteSpace(request.Password)}");
+    return Results.Ok(new { ok = true });
 });
 users.MapDelete("/{id:int}", async (int id, HttpContext context, WareHubDbContext db) =>
 {
     var current = (User)context.Items["CurrentUser"]!; if (current.Id == id) return Results.BadRequest(new { error = "Không thể tự xoá chính mình" });
-    var user = await db.Users.FindAsync(id); if (user is null) return Results.NotFound(new { error = "Không tìm thấy người dùng" }); db.Users.Remove(user); await db.SaveChangesAsync(); return Results.Ok(new { ok = true });
+    var user = await db.Users.FindAsync(id); if (user is null) return Results.NotFound(new { error = "Không tìm thấy người dùng" }); db.Users.Remove(user); await db.SaveChangesAsync(); userCache.Invalidate(id); AuditUserAction(app.Logger, context, "xoá", user.Username, ""); return Results.Ok(new { ok = true });
 });
 
 var print = app.MapGroup("/api/print").RequireAuthorization();
@@ -352,7 +457,7 @@ print.MapPost("/", async (PrintRequest request, HttpContext context, WareHubDbCo
 });
 print.MapGet("/history", async (string? from, string? to, string? search, int page = 1, int pageSize = 30, WareHubDbContext db = null!) =>
 {
-    page = Math.Max(page, 1); pageSize = Math.Clamp(pageSize, 1, 100); var query = db.PrintHistory.AsNoTracking().AsQueryable();
+    page = Math.Max(page, 1); pageSize = Math.Clamp(pageSize, 1, 100); search = ClampText(search, 100); var query = db.PrintHistory.AsNoTracking().AsQueryable();
     if (DateTime.TryParse(from, out var fromDate)) query = query.Where(x => x.PrintedAt >= fromDate.Date);
     if (DateTime.TryParse(to, out var toDate)) query = query.Where(x => x.PrintedAt < toDate.Date.AddDays(1));
     if (!string.IsNullOrWhiteSpace(search)) query = query.Where(x => x.Device.Ma.Contains(search) || x.Device.Ten.Contains(search) || x.User.FullName.Contains(search));
@@ -399,6 +504,7 @@ handovers.MapGet("/latest", async (int device_id, string? model, WareHubDbContex
     if (latest is not null)
         return Results.Ok(new { found = true, source = "device", no = latest.No, created_at = latest.CreatedAt, data = JsonSerializer.Deserialize<JsonElement>(latest.Payload!) });
 
+    model = ClampText(model, 200);
     if (!string.IsNullOrWhiteSpace(model))
     {
         var candidates = await db.Handovers.AsNoTracking().Where(x => x.Payload != null && x.Payload.Contains(model))
@@ -414,6 +520,7 @@ handovers.MapGet("/latest", async (int device_id, string? model, WareHubDbContex
 });
 handovers.MapGet("/", async (string? search, int? page, int? pageSize, WareHubDbContext db) =>
 {
+    search = ClampText(search, 100);
     var query = db.Handovers.AsNoTracking().AsQueryable();
     if (!string.IsNullOrWhiteSpace(search))
     {
@@ -477,11 +584,36 @@ static string? ValidateDevice(DeviceRequest request)
         ("Ghi chú", request.GhiChu, 500),
         ("Nhà sản xuất", request.Producer, 100),
         ("IP Address", request.IpAddress, 45),
+        ("Windows", request.OsName, 100),
+        ("Office", request.OfficeName, 100),
+        ("Số điện thoại", request.PhoneNumber, 30),
+        ("Serial SIM", request.SimSerial, 50),
     }.FirstOrDefault(field => (field.Value?.Length ?? 0) > field.Max);
     return tooLong.Label is not null ? $"{tooLong.Label} không được vượt quá {tooLong.Max} ký tự" : null;
 }
 static Device ToDevice(DeviceRequest request) { var device = new Device { IsActive = true, LifecycleStatus = "old" }; CopyDevice(device, request); return device; }
-static void CopyDevice(Device target, DeviceRequest request) { target.Ma = request.Ma!.Trim(); target.Ten = request.Ten!.Trim(); target.Loai = request.Loai!; target.Kho = request.Loai == "phone" ? "12" : "24"; target.Model = request.Model; target.Cpu = request.Cpu; target.Ram = request.Ram; target.Storage = request.Storage; target.UserName = request.UserName; target.RegisteredAt = request.RegisteredAt; target.PhongBan = request.PhongBan; target.GhiChu = request.GhiChu; target.Producer = request.Producer; target.IpAddress = request.IpAddress; }
+static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+static void CopyDevice(Device target, DeviceRequest request)
+{
+    target.Ma = request.Ma!.Trim();
+    target.Ten = request.Ten!.Trim();
+    target.Loai = request.Loai!;
+    target.Kho = request.Loai == "phone" ? "12" : "24";
+    target.Model = request.Model;
+    target.Cpu = request.Cpu;
+    target.Ram = request.Ram;
+    target.Storage = request.Storage;
+    target.UserName = request.UserName;
+    target.RegisteredAt = request.RegisteredAt;
+    target.PhongBan = request.PhongBan;
+    target.GhiChu = request.GhiChu;
+    target.Producer = request.Producer;
+    target.IpAddress = request.IpAddress;
+    target.OsName = NullIfBlank(request.OsName);
+    target.OfficeName = NullIfBlank(request.OfficeName);
+    target.PhoneNumber = NullIfBlank(request.PhoneNumber);
+    target.SimSerial = NullIfBlank(request.SimSerial);
+}
 static string? Truncate(string? value, int max) => string.IsNullOrWhiteSpace(value) ? null : (value.Length > max ? value[..max] : value);
 static Dictionary<string, string?> SnapshotDevice(Device device) => new()
 {
@@ -495,12 +627,63 @@ static Dictionary<string, string?> SnapshotDevice(Device device) => new()
     ["phong_ban"] = device.PhongBan,
     ["ghi_chu"] = device.GhiChu,
     ["registered_at"] = device.RegisteredAt?.ToString("yyyy-MM-dd"),
+    ["cpu"] = device.Cpu,
+    ["ram"] = device.Ram,
+    ["storage"] = device.Storage,
+    ["os_name"] = device.OsName,
+    ["office_name"] = device.OfficeName,
+    ["phone_number"] = device.PhoneNumber,
+    ["sim_serial"] = device.SimSerial,
 };
+
+static IResult GlpiNotConfigured() => Results.BadRequest(new { error = "Chưa cấu hình kết nối GLPI. Thêm mục \"Glpi\" (BaseUrl, ClientId, ClientSecret, Username, Password) vào appsettings.Development.json." });
+// Chạy 1 lần kiểm tra GLPI cho admin: báo chưa cấu hình / lỗi kết nối bằng thông báo rõ ràng thay vì lỗi 500.
+static async Task<IResult> GlpiProbeAsync<T>(GlpiClient glpi, Func<Task<T>> probe)
+{
+    if (!glpi.IsConfigured) return GlpiNotConfigured();
+    try { return Results.Ok(await probe()); }
+    catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status502BadGateway); }
+}
+// Lấy 1 danh sách từ GLPI; lỗi cấu hình/mạng/quá thời gian trả về dạng (danh sách rỗng, thông báo) thay vì ném ra ngoài.
+static async Task<(List<GlpiAsset> Items, string? Error)> TryFetchAsync(Func<Task<List<GlpiAsset>>> fetch, CancellationToken ct)
+{
+    try { return (await fetch(), null); }
+    catch (InvalidOperationException ex) { return ([], ex.Message); }
+    catch (HttpRequestException ex) { return ([], $"Không kết nối được tới GLPI: {ex.Message}"); }
+    catch (TaskCanceledException) when (!ct.IsCancellationRequested) { return ([], "Không kết nối được tới GLPI: hết thời gian chờ"); }
+}
+// Thông tin chung của 1 tài sản GLPI (tên, model, hãng, người dùng, vị trí, ghi chú) chép vào thiết bị — dùng cho cả thêm mới lẫn cập nhật.
+static void ApplyGlpiAsset(Device device, GlpiAsset asset)
+{
+    if (Truncate(asset.Name, 150) is { } name) device.Ten = name;
+    device.Model = Truncate(asset.Model?.Name, 150);
+    device.Producer = Truncate(asset.Manufacturer?.Name, 100);
+    device.UserName = Truncate(asset.User?.Name, 100);
+    device.PhongBan = Truncate(asset.Location?.Name, 100);
+    device.GhiChu = Truncate(asset.Comment, 500);
+}
+// Chép chi tiết đọc từ GLPI vào thiết bị. GLPI không trả gì cho 1 mục thì giữ nguyên giá trị đang có (không xoá dữ liệu đã nhập tay).
+static void ApplyPhoneDetails(Device device, GlpiPhoneDetails details)
+{
+    device.PhoneNumber = Truncate(details.PhoneNumber, 30) ?? device.PhoneNumber;
+    device.SimSerial = Truncate(details.SimSerial, 50) ?? device.SimSerial;
+}
+static void ApplyDetails(Device device, GlpiComputerDetails details)
+{
+    device.Cpu = Truncate(details.Cpu, 100) ?? device.Cpu;
+    device.Ram = Truncate(details.Ram, 100) ?? device.Ram;
+    device.Storage = Truncate(details.Storage, 100) ?? device.Storage;
+    device.IpAddress = Truncate(details.Ip, 45) ?? device.IpAddress;
+    device.OsName = Truncate(details.Windows, 100) ?? device.OsName;
+    device.OfficeName = Truncate(details.Office, 100) ?? device.OfficeName;
+}
 static List<(string Field, string? OldValue, string? NewValue)> DiffDevice(Dictionary<string, string?> before, Dictionary<string, string?> after) =>
     before.Where(entry => entry.Value != after[entry.Key]).Select(entry => (entry.Key, entry.Value, after[entry.Key])).ToList();
 // Ghi lại từng trường thiết bị đã đổi (không làm gì nếu không có thay đổi); người gọi tự SaveChanges.
 static void RecordDeviceChanges(WareHubDbContext db, int deviceId, int userId, List<(string Field, string? OldValue, string? NewValue)> changes) =>
-    db.DeviceHistory.AddRange(changes.Select(c => new DeviceHistory { DeviceId = deviceId, UserId = userId, FieldName = c.Field, OldValue = c.OldValue, NewValue = c.NewValue }));
+    db.DeviceHistory.AddRange(changes.Select(c => new DeviceHistory { DeviceId = deviceId, UserId = userId, FieldName = c.Field, OldValue = ClipHistory(c.OldValue), NewValue = ClipHistory(c.NewValue) }));
+// Cột lịch sử chỉ chứa 255 ký tự trong khi ghi chú dài tới 500: cắt bớt để lưu lịch sử không làm hỏng cả lần lưu/đồng bộ.
+static string? ClipHistory(string? value) => value is { Length: > 255 } ? value[..255] : value;
 // Phân trang dùng chung: trang tối thiểu 1, số dòng mỗi trang trong khoảng 1..100.
 static (int Page, int Limit) ParsePaging(int? page, int? pageSize, int defaultSize) => (Math.Max(page ?? 1, 1), Math.Clamp(pageSize ?? defaultSize, 1, 100));
 static int TotalPages(int total, int limit) => Math.Max((int)Math.Ceiling(total / (double)limit), 1);
@@ -516,6 +699,14 @@ static async Task<string> NextHandoverNoAsync(WareHubDbContext db, DateOnly day)
     var sequence = last is null ? 1 : int.Parse(last[prefix.Length..]) + 1;
     return $"{prefix}{sequence:D3}";
 }
+// Chuỗi từ người ngoài đưa vào nhật ký: bỏ ký tự điều khiển (xuống dòng...) và giới hạn độ dài để không giả được dòng log.
+static string LogSafe(string? value) => value is null ? "" : new string(value.Where(c => !char.IsControl(c)).Take(100).ToArray());
+// Cắt chuỗi người dùng gửi lên (tìm kiếm...) về độ dài tối đa để không ai bắt máy chủ quét LIKE với chuỗi khổng lồ.
+static string? ClampText(string? value, int max) => value is not null && value.Length > max ? value[..max] : value;
+// Dấu vân tay trạng thái đăng nhập của tài khoản (mật khẩu + vai trò), ghi vào token; đổi 1 trong 2 thì token cũ mất hiệu lực.
+static string SessionStamp(User user) => Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes($"{user.PasswordHash}|{user.Role}")))[..22];
+static void AuditUserAction(ILogger logger, HttpContext context, string action, string target, string detail) =>
+    logger.LogWarning("AUDIT {Actor} đã {Action} người dùng {Target} {Detail} (ip {Ip})", ((User)context.Items["CurrentUser"]!).Username, action, target, detail, context.Connection.RemoteIpAddress);
 static object UserDto(User user) => new { user.Id, user.Username, user.FullName, user.Role, is_active = user.IsActive };
 static bool VerifyPassword(User user, string password, IPasswordHasher<User> hasher)
 {
@@ -531,11 +722,12 @@ static string CreateToken(User user, IConfiguration config)
         new Claim(JwtRegisteredClaimNames.UniqueName, user.Username),
         new Claim(ClaimTypes.Role, user.Role),
         new Claim("full_name", user.FullName),
+        new Claim("stamp", SessionStamp(user)),
     };
     var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["Jwt:Secret"]!));
     var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
     var expires = DateTime.UtcNow.AddHours(config.GetValue("Jwt:ExpiresInHours", 8));
-    return new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(claims: claims, expires: expires, signingCredentials: credentials));
+    return new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(JwtIssuer, JwtAudience, claims, expires: expires, signingCredentials: credentials));
 }
 // Chờ MySQL sẵn sàng (tối đa 20 lần, cách nhau 2 giây) rồi tạo/bổ sung schema và tài khoản admin mặc định.
 static async Task InitializeDatabaseAsync(IServiceProvider services, IConfiguration configuration)
@@ -561,6 +753,10 @@ static async Task EnsureSchemaAsync(WareHubDbContext db)
     await db.Database.EnsureCreatedAsync();
     await EnsureDeviceColumnAsync(db, "producer");
     await EnsureDeviceColumnAsync(db, "ip_address");
+    await EnsureDeviceColumnAsync(db, "os_name");
+    await EnsureDeviceColumnAsync(db, "office_name");
+    await EnsureDeviceColumnAsync(db, "phone_number");
+    await EnsureDeviceColumnAsync(db, "sim_serial");
     await EnsureIndexAsync(db, "devices", "IX_devices_Loai", "`Loai`");
     await EnsureIndexAsync(db, "devices", "IX_devices_LifecycleStatus", "`lifecycle_status`");
     await EnsureIndexAsync(db, "devices", "IX_devices_PhongBan", "`phong_ban`");
@@ -579,6 +775,12 @@ static async Task SeedDefaultAdminAsync(WareHubDbContext db, IServiceProvider se
     if (await db.Users.AnyAsync()) return;
     var user = new User { Username = configuration["DefaultAdmin:User"] ?? "admin", FullName = configuration["DefaultAdmin:FullName"] ?? "Quản trị viên", Role = "admin" };
     var password = configuration["DefaultAdmin:Password"] ?? throw new InvalidOperationException("Thiếu DefaultAdmin:Password");
+    if (PasswordPolicy.Validate(password, user.Username) is { } weak)
+    {
+        var message = $"DefaultAdmin:Password không đạt yêu cầu bảo mật ({weak}). Đặt mật khẩu mạnh hơn trong cấu hình.";
+        if (services.GetRequiredService<IHostEnvironment>().IsProduction()) throw new InvalidOperationException(message);
+        services.GetRequiredService<ILoggerFactory>().CreateLogger("Security").LogWarning("{Message}", message);
+    }
     user.PasswordHash = services.GetRequiredService<IPasswordHasher<User>>().HashPassword(user, password);
     db.Users.Add(user);
     await db.SaveChangesAsync();
@@ -597,6 +799,10 @@ static async Task EnsureDeviceColumnAsync(WareHubDbContext db, string columnName
     {
         "producer" => "ALTER TABLE devices ADD COLUMN producer VARCHAR(100) NULL",
         "ip_address" => "ALTER TABLE devices ADD COLUMN ip_address VARCHAR(45) NULL",
+        "os_name" => "ALTER TABLE devices ADD COLUMN os_name VARCHAR(100) NULL",
+        "office_name" => "ALTER TABLE devices ADD COLUMN office_name VARCHAR(100) NULL",
+        "phone_number" => "ALTER TABLE devices ADD COLUMN phone_number VARCHAR(30) NULL",
+        "sim_serial" => "ALTER TABLE devices ADD COLUMN sim_serial VARCHAR(50) NULL",
         _ => throw new InvalidOperationException("Cột thiết bị không hợp lệ"),
     };
     await db.Database.ExecuteSqlRawAsync(sql);

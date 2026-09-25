@@ -14,7 +14,9 @@ export function setPrintPageSize(css) {
   styleEl.textContent = `@page { ${css} }`;
 }
 
-export const HANDOVER_PAGE_CSS = 'size: A4 portrait; margin: 8mm;';
+// Lề trang khai báo 0 và lề 8mm do chính tờ phiếu tự chừa (padding): nếu để lề trong @page thì khi người dùng chọn
+// Margins = None trong hộp thoại in của Chrome (vd. còn nhớ từ lần in tem Brother) lề bị ghi đè, phiếu sát mép và lệch.
+export const HANDOVER_PAGE_CSS = 'size: A4 portrait; margin: 0;';
 
 export function labelPageCss(kho) {
   return kho === '24' ? 'size: 60mm 24mm; margin: 0;' : 'size: 30mm 12mm; margin: 0;';

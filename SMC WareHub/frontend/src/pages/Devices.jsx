@@ -8,10 +8,10 @@ import { HandoverModal, HandoverSheet, buildHandoverData, mergeSpecs } from '../
 import { Pager } from '../components/Pager';
 import { setPrintPageSize, labelPageCss, printHandoverSheets, printWithBodyClass } from '../utils/printPageSize';
 import { LOAI_LABELS } from '../utils/deviceTypes';
-import { useT } from '../i18n';
+import { useT, translateServerMessage } from '../i18n';
 import { useReconnect } from '../context/ConnectionContext';
 
-const emptyForm = { id: null, source_id: null, original_ma: '', ma: '', ten: '', loai: 'laptop', model: '', producer: '', ip_address: '', cpu: '', ram: '', storage: '', is_active: false, user_name: '', registered_at: '', phong_ban: '', ghi_chu: '' };
+const emptyForm = { id: null, source_id: null, original_ma: '', ma: '', ten: '', loai: 'laptop', model: '', producer: '', ip_address: '', cpu: '', ram: '', storage: '', os_name: '', office_name: '', phone_number: '', sim_serial: '', is_active: false, user_name: '', registered_at: '', phong_ban: '', ghi_chu: '' };
 
 // Cột của bảng thiết bị — bấm chuột phải vào tiêu đề bảng để tick ẩn/hiện từng cột.
 const COLUMN_DEFS = [
@@ -23,6 +23,13 @@ const COLUMN_DEFS = [
   { key: 'user_name', labelKey: 'field.user_name', cell: (d) => d.user_name || '—' },
   { key: 'phong_ban', labelKey: 'field.phong_ban', cell: (d) => d.phong_ban || '—' },
   { key: 'ip_address', labelKey: 'field.ip_address', cell: (d) => d.ip_address || '—' },
+  { key: 'cpu', labelKey: 'field.cpu', defaultHidden: true, cell: (d) => d.cpu || '—' },
+  { key: 'ram', labelKey: 'field.ram', defaultHidden: true, cell: (d) => d.ram || '—' },
+  { key: 'storage', labelKey: 'field.storage', defaultHidden: true, cell: (d) => d.storage || '—' },
+  { key: 'os_name', labelKey: 'field.os_name', defaultHidden: true, cell: (d) => d.os_name || '—' },
+  { key: 'office_name', labelKey: 'field.office_name', defaultHidden: true, cell: (d) => d.office_name || '—' },
+  { key: 'phone_number', labelKey: 'field.phone_number', defaultHidden: true, cell: (d) => d.phone_number || '—' },
+  { key: 'sim_serial', labelKey: 'field.sim_serial', defaultHidden: true, cell: (d) => d.sim_serial || '—' },
   { key: 'ghi_chu', labelKey: 'field.ghi_chu', cell: (d) => d.ghi_chu || '—' },
   { key: 'registered_at', labelKey: 'field.date', cell: (d) => (d.registered_at ? d.registered_at.slice(0, 10) : '—') },
 ];
@@ -31,9 +38,9 @@ const COLUMN_STORAGE_KEY = 'warehub-devices-columns';
 function loadColumnVisibility() {
   try {
     const saved = JSON.parse(localStorage.getItem(COLUMN_STORAGE_KEY) || '{}');
-    return Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, saved[c.key] !== false]));
+    return Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, saved[c.key] === undefined ? !c.defaultHidden : saved[c.key] !== false]));
   } catch {
-    return Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, true]));
+    return Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, !c.defaultHidden]));
   }
 }
 
@@ -59,6 +66,10 @@ const deviceToFormFields = (device) => ({
   cpu: device.cpu || '',
   ram: device.ram || '',
   storage: device.storage || '',
+  os_name: device.os_name || '',
+  office_name: device.office_name || '',
+  phone_number: device.phone_number || '',
+  sim_serial: device.sim_serial || '',
   user_name: device.user_name || '',
   registered_at: device.registered_at ? device.registered_at.slice(0, 10) : '',
   phong_ban: device.phong_ban || '',
@@ -216,7 +227,11 @@ export function Devices() {
 
   function commitReview(incoming) {
     setError('');
-    setAddedNotice(t('dev.queueAdded', { count: incoming.length }));
+    // Báo đúng số thiết bị thực sự được thêm: thiết bị đã có trong hàng đợi không thêm lần nữa.
+    const inQueue = new Set(queue.map((d) => d.id));
+    const added = incoming.filter((d) => !inQueue.has(d.id)).length;
+    const already = incoming.length - added;
+    setAddedNotice([added > 0 ? t('dev.queueAdded', { count: added }) : '', already > 0 ? t('dev.queueAlready', { count: already }) : ''].filter(Boolean).join(' '));
     addDevices(incoming);
     setSelected((previous) => {
       const next = new Set(previous);
@@ -229,6 +244,13 @@ export function Devices() {
 
   function reviewPrintList() {
     const incoming = devices.filter((device) => printListSelection.has(device.id));
+
+    // Mã QR chứa Serial Number (Mã thiết bị): thiết bị không có serial thì không tạo được QR, phải báo cho người dùng biết.
+    const noSerial = incoming.filter((device) => !device.ma?.trim());
+    if (noSerial.length > 0) {
+      setError(t('dev.noSerial', { count: noSerial.length, names: noSerial.slice(0, 5).map((d) => d.ten || `#${d.id}`).join(', ') }));
+      return;
+    }
 
     if (incoming.length > MAX_PRINT_BATCH) {
       setError(t('dev.printTooMany', { max: MAX_PRINT_BATCH, count: incoming.length }));
@@ -323,8 +345,14 @@ export function Devices() {
         t('dev.syncFetched', { computers: result.computers, phones: result.phones }),
       ];
       if (result.skipped) lines.push(t('dev.syncSkipped', { count: result.skipped }));
+      if (result.skipped_names?.length > 0) lines.push(t('dev.syncSkippedNames', { names: result.skipped_names.join(', '), more: result.skipped > result.skipped_names.length ? '…' : '' }));
       if (result.duplicates) lines.push(t('dev.syncDuplicates', { count: result.duplicates }));
-      if (result.phone_error) lines.push(t('dev.syncPhoneError', { error: result.phone_error }));
+      if (result.tablets || result.monitors) lines.push(t('dev.syncFetchedMore', { tablets: result.tablets ?? 0, monitors: result.monitors ?? 0 }));
+      if (result.phone_error) lines.push(t('dev.syncPhoneError', { error: translateServerMessage(result.phone_error) }));
+      if (result.tablet_error) lines.push(t('dev.syncTabletError', { error: translateServerMessage(result.tablet_error) }));
+      if (result.monitor_error) lines.push(t('dev.syncMonitorError', { error: translateServerMessage(result.monitor_error) }));
+      lines.push(t('dev.syncDetailed', { count: result.detailed ?? 0 }));
+      (result.detail_warnings || []).forEach((w) => lines.push(`⚠ ${translateServerMessage(w)}`));
       alert(lines.join('\n'));
       fetchDevices();
     } catch (err) {
@@ -415,8 +443,12 @@ export function Devices() {
   }
 
   async function handlePrintNow(device) {
-    setPrintingId(device.id);
     setError('');
+    if (!device.ma?.trim()) {
+      setError(t('dev.noSerial', { count: 1, names: device.ten || `#${device.id}` }));
+      return;
+    }
+    setPrintingId(device.id);
     try {
       await api.post('/print', { deviceIds: [device.id] });
       setInstantPrintDevice(device);
@@ -694,7 +726,22 @@ export function Devices() {
               </div>
               <div className="form-row mb-3">
                 <div className="form-col"><label className="form-label">{t('field.ip_address')}</label><input className="form-control" value={form.ip_address} onChange={(e) => setForm({ ...form, ip_address: e.target.value })} /></div>
+                <div className="form-col"><label className="form-label">{t('field.cpu')}</label><input className="form-control" value={form.cpu} onChange={(e) => setForm({ ...form, cpu: e.target.value })} /></div>
               </div>
+              <div className="form-row mb-3">
+                <div className="form-col"><label className="form-label">{t('field.ram')}</label><input className="form-control" value={form.ram} onChange={(e) => setForm({ ...form, ram: e.target.value })} /></div>
+                <div className="form-col"><label className="form-label">{t('field.storage')}</label><input className="form-control" value={form.storage} onChange={(e) => setForm({ ...form, storage: e.target.value })} /></div>
+              </div>
+              <div className="form-row mb-3">
+                <div className="form-col"><label className="form-label">{t('field.os_name')}</label><input className="form-control" value={form.os_name} onChange={(e) => setForm({ ...form, os_name: e.target.value })} placeholder="Win 11 Professional" /></div>
+                <div className="form-col"><label className="form-label">{t('field.office_name')}</label><input className="form-control" value={form.office_name} onChange={(e) => setForm({ ...form, office_name: e.target.value })} placeholder="Office 365" /></div>
+              </div>
+              {form.loai === 'phone' && (
+                <div className="form-row mb-3">
+                  <div className="form-col"><label className="form-label">{t('field.phone_number')}</label><input className="form-control" value={form.phone_number} onChange={(e) => setForm({ ...form, phone_number: e.target.value })} /></div>
+                  <div className="form-col"><label className="form-label">{t('field.sim_serial')}</label><input className="form-control" value={form.sim_serial} onChange={(e) => setForm({ ...form, sim_serial: e.target.value })} /></div>
+                </div>
+              )}
               {formError && <div className="error-box">{formError}</div>}
             </div>
 

@@ -1,14 +1,15 @@
+# Chạy nhanh trên 1 máy (không blue-green). Các giá trị bí mật BẮT BUỘC đặt trong file .env cùng thư mục (không có giá trị mặc định
+# yếu): thiếu thì docker compose báo lỗi ngay thay vì chạy với mật khẩu ai cũng đoán được.
+# Chỉ cổng 80 (web) được mở ra ngoài; MySQL và backend chỉ nói chuyện với nhau trong mạng nội bộ của Docker.
 services:
   mysql:
     image: mysql:8.0
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-changeme_db_password}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?Cần đặt DB_PASSWORD trong file .env}
       MYSQL_DATABASE: WareHub
     volumes:
       - mysql_data:/var/lib/mysql
-    ports:
-      - "3306:3306"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 5s
@@ -20,17 +21,17 @@ services:
     restart: unless-stopped
     environment:
       ASPNETCORE_ENVIRONMENT: Production
-      ConnectionStrings__Default: Server=mysql;Port=3306;Database=WareHub;User=root;Password=${DB_PASSWORD:-changeme_db_password}
-      Jwt__Secret: ${JWT_SECRET:-change_this_production_secret_to_at_least_32_characters}
+      ConnectionStrings__Default: Server=mysql;Port=3306;Database=WareHub;User=root;Password=${DB_PASSWORD:?Cần đặt DB_PASSWORD trong file .env}
+      Jwt__Secret: ${JWT_SECRET:?Cần đặt JWT_SECRET trong file .env (chuỗi ngẫu nhiên tối thiểu 32 ký tự)}
       DefaultAdmin__User: ${DEFAULT_ADMIN_USER:-admin}
-      DefaultAdmin__Password: ${DEFAULT_ADMIN_PASSWORD:-admin123}
+      DefaultAdmin__Password: ${DEFAULT_ADMIN_PASSWORD:?Cần đặt DEFAULT_ADMIN_PASSWORD trong file .env (tối thiểu 10 ký tự, có chữ và số)}
       DefaultAdmin__FullName: ${DEFAULT_ADMIN_FULLNAME:-Quan tri vien}
       Cors__Origins__0: ${CORS_ORIGIN:-http://localhost}
     depends_on:
       mysql:
         condition: service_healthy
-    ports:
-      - "4000:4000"
+    # Không có "ports": backend chỉ nhận yêu cầu từ container frontend (nginx). Mở cổng này ra ngoài sẽ cho người ngoài
+    # đi vòng qua nginx và tự đặt X-Forwarded-For để lẩn tránh việc khoá đăng nhập theo IP.
 
   frontend:
     build: ./frontend

@@ -33,10 +33,10 @@ tem-thiet-bi/
 
 ## Chạy bằng Docker (khuyến nghị)
 
-1. Đặt các biến môi trường trước khi chạy, tối thiểu:
+1. Tạo file `.env` cạnh `docker-compose.yml` với các giá trị **bắt buộc** (không có mặc định; thiếu thì compose báo lỗi ngay):
    - `DB_PASSWORD` — mật khẩu MySQL root
-   - `JWT_SECRET` — chuỗi bí mật ngẫu nhiên tối thiểu 32 ký tự
-   - `DEFAULT_ADMIN_PASSWORD` — mật khẩu admin mặc định
+   - `JWT_SECRET` — chuỗi ngẫu nhiên tối thiểu 32 ký tự, không chứa chữ "change"/"example" (bản Production từ chối khởi động nếu là khoá mẫu). Tạo nhanh: `openssl rand -base64 48`
+   - `DEFAULT_ADMIN_PASSWORD` — mật khẩu admin mặc định: tối thiểu 10 ký tự, có cả chữ và số, không phải mật khẩu phổ biến (không đạt thì bản Production không khởi động)
 
 2. Chạy toàn bộ hệ thống:
    ```bash
@@ -45,7 +45,7 @@ tem-thiet-bi/
 
 3. Truy cập:
    - Web: `http://<ip-máy-chủ>` (cổng 80)
-   - API (nếu cần gọi trực tiếp): `http://<ip-máy-chủ>:4000/api`
+   - API chỉ đi qua web (`/api`); cổng 4000 của backend và cổng 3306 của MySQL **không** mở ra ngoài (chỉ trong mạng nội bộ của Docker)
 
 4. Đăng nhập lần đầu bằng tài khoản admin mặc định từ `DEFAULT_ADMIN_USER` / `DEFAULT_ADMIN_PASSWORD`. Tài khoản này chỉ được tạo tự động **nếu bảng `users` đang trống**.
 
@@ -165,6 +165,33 @@ Người dùng khác thấy màn hình "Hệ thống đang bảo trì" kèm thô
 Nếu chỉ tắt/khởi động lại backend mà quên bật bảo trì, trình duyệt người dùng vẫn tự hiện "Không kết nối được máy chủ", tự tiếp tục khi backend chạy lại, và **tự tải lại trang khi phát hiện phiên bản mới** để lấy giao diện mới (dữ liệu chưa lưu trong ô nhập sẽ mất, riêng phiếu bàn giao đang soạn được lưu nháp tự động).
 
 **Khi mất mạng / mất kết nối máy chủ**: trình duyệt mất mạng thì hiện thanh đỏ cảnh báo (vẫn xem được dữ liệu đã tải, nhưng lưu và in chưa làm được vì việc in ghi lịch sử lên máy chủ); có mạng trở lại thì tự tải lại dữ liệu. Font chữ tải không chặn hiển thị nên mạng nội bộ chặn Google Fonts thì trang vẫn mở ngay bằng font hệ thống (tem in có thể khác font).
+
+## Bảo mật
+
+Đã áp dụng (mỗi mục đều có test tấn công tương ứng, chạy trên bản thử):
+
+- **Đăng nhập:** khoá tạm khi sai nhiều lần (5 lần sai cùng 1 IP + tài khoản → khoá 5 phút, tăng gấp đôi mỗi lần tái phạm; 30 lần sai từ 1 IP → khoá IP, chặn dò nhiều tài khoản); nginx giới hạn thêm 20 lượt/phút/IP ở lớp cổng; phản hồi và thời gian như nhau dù tài khoản có tồn tại hay không.
+- **Mật khẩu:** tối thiểu 10 ký tự, có chữ và số, không chứa tên đăng nhập, không phải mật khẩu phổ biến.
+- **Phiên (JWT):** chỉ nhận HS256, đúng nơi phát hành/đối tượng, có hạn dùng. Đổi mật khẩu, đổi vai trò hoặc khoá tài khoản làm mọi token cũ mất hiệu lực **ngay** (kể cả quyền admin đã bị thu hồi). Admin không tự hạ quyền/khoá/xoá chính mình.
+- **Phân quyền:** mọi API yêu cầu đăng nhập (trừ health/ready/trạng thái bảo trì/đăng nhập); thao tác quản trị chỉ admin. API không trả `password_hash`.
+- **Tấn công đầu vào:** truy vấn có tham số (chống SQL injection), giới hạn kích thước body 1MB, độ dài chuỗi tìm kiếm, kích thước phiếu; yêu cầu sai định dạng trả 4xx (không phải 500).
+- **Trình duyệt:** CSP chỉ cho script của chính máy chủ (XSS không chạy được mã), `X-Frame-Options: DENY`, `nosniff`, `no-referrer`, API `Cache-Control: no-store`. Font, thư viện đều đóng gói sẵn — web không gọi ra internet.
+- **Triển khai:** backend chạy bằng tài khoản không phải root; MySQL/backend không mở cổng ra ngoài; không có mật khẩu mặc định yếu; `appsettings.Development.json` không vào image Docker; nginx ẩn phiên bản.
+- **Thư viện:** `npm audit` và `dotnet list package --vulnerable` đều sạch tại thời điểm cập nhật — nên chạy lại định kỳ.
+
+**Việc nên làm thêm khi đưa vào chạy thật (cấu hình hạ tầng, không nằm trong code):**
+
+1. **HTTPS.** Web nội bộ vẫn nên chạy HTTPS (chứng chỉ của CA nội bộ, hoặc đặt sau tường lửa/proxy của công ty có TLS): nếu không, mật khẩu và token đi trong mạng dưới dạng chữ rõ. Khi đã có HTTPS, backend tự bật HSTS. Nếu đặt thêm 1 proxy phía trước gateway, chỉnh `X-Forwarded-For` trong `deploy/gateway/nginx.conf` cho đúng.
+2. **Tài khoản MySQL riêng cho ứng dụng** thay vì `root`. Ví dụ (chạy 1 lần bằng root, rồi đổi `User=`/`Password=` trong chuỗi kết nối):
+   ```sql
+   CREATE USER 'warehub'@'%' IDENTIFIED BY '<mật-khẩu-mạnh>';
+   GRANT ALL PRIVILEGES ON WareHub.* TO 'warehub'@'%';
+   ```
+3. **Sao lưu MySQL định kỳ** và giữ bản sao ngoài máy chủ.
+4. **Đổi mật khẩu admin mặc định** ngay sau lần đăng nhập đầu và tạo tài khoản riêng cho từng người.
+5. Giữ `appsettings.Development.json` và `deploy/.env` ngoài git (đã có trong `.gitignore`); nếu từng lộ, đổi ngay khoá GLPI và mật khẩu DB.
+
+Rủi ro còn lại đã biết: token đăng nhập lưu trong `localStorage` của trình duyệt (nếu có lỗ XSS thì đọc được; CSP đã chặn cách khai thác thông thường) và chưa có nút "Đăng xuất khỏi mọi thiết bị" (token tự hết hạn sau 8 giờ, hoặc mất hiệu lực khi đổi mật khẩu).
 
 ## Cấu trúc dữ liệu chính
 

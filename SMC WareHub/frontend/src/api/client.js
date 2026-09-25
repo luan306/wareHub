@@ -64,7 +64,7 @@ async function request(path, { method = 'GET', body, params } = {}) {
   }
 
   if (!res.ok) {
-    throw new ApiError(translateServerMessage(data.error) || translate('error.http', { status: res.status }), { status: res.status });
+    throw new ApiError(translateServerMessage(data.error || data.detail) || translate('error.http', { status: res.status }), { status: res.status });
   }
   connectionEvents.emit({ type: 'ok' });
   return data;

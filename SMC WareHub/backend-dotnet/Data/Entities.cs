@@ -36,6 +36,13 @@ public sealed class Device
     [Column("ghi_chu")] public string? GhiChu { get; set; }
     [Column("producer")] public string? Producer { get; set; }
     [Column("ip_address")] public string? IpAddress { get; set; }
+    // Lấy từ GLPI khi đồng bộ (dùng làm giá trị mặc định cho phiếu bàn giao): tên hệ điều hành và bản Office.
+    [Column("os_name")] public string? OsName { get; set; }
+    [Column("office_name")] public string? OfficeName { get; set; }
+    /// <summary>Số điện thoại của SIM đang gắn trong máy (điện thoại) — in ở ô Mobile phone number của phiếu bàn giao.</summary>
+    [Column("phone_number")] public string? PhoneNumber { get; set; }
+    /// <summary>Số serial (ICCID) của SIM.</summary>
+    [Column("sim_serial")] public string? SimSerial { get; set; }
     [Column("created_at")] public DateTime CreatedAt { get; set; }
     [Column("updated_at")] public DateTime UpdatedAt { get; set; }
     public ICollection<PrintHistory> PrintHistory { get; set; } = new List<PrintHistory>();

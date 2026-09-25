@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using WareHub.Api.Contracts;
 
@@ -27,7 +28,7 @@ public sealed class GlpiAsset
 /// Gọi GLPI High-Level REST API (OAuth2 "password" grant) để lấy danh sách máy tính (Computer).
 /// Token được cache trong bộ nhớ tới khi gần hết hạn thì tự xin lại — không cần đăng nhập lại mỗi lần gọi.
 /// </summary>
-public sealed class GlpiClient(HttpClient http, IOptions<GlpiOptions> optionsAccessor, ILogger<GlpiClient> logger)
+public sealed partial class GlpiClient(HttpClient http, IOptions<GlpiOptions> optionsAccessor, ILogger<GlpiClient> logger)
 {
     private static readonly JsonSerializerOptions SnakeCaseJson = new()
     {
@@ -41,10 +42,30 @@ public sealed class GlpiClient(HttpClient http, IOptions<GlpiOptions> optionsAcc
 
     public bool IsConfigured => _options.IsConfigured;
 
+    // Token dùng chung cho nhiều yêu cầu song song: chỉ 1 luồng xin token mới, các luồng khác chờ rồi dùng lại.
+    private readonly SemaphoreSlim _tokenLock = new(1, 1);
+
+    private void InvalidateToken() => _tokenExpiresAt = DateTimeOffset.MinValue;
+
     private async Task<string> GetAccessTokenAsync(CancellationToken ct)
     {
         if (_cachedToken is not null && DateTimeOffset.UtcNow < _tokenExpiresAt)
             return _cachedToken;
+        await _tokenLock.WaitAsync(ct);
+        try
+        {
+            if (_cachedToken is not null && DateTimeOffset.UtcNow < _tokenExpiresAt)
+                return _cachedToken;
+            return await RequestTokenAsync(ct);
+        }
+        finally
+        {
+            _tokenLock.Release();
+        }
+    }
+
+    private async Task<string> RequestTokenAsync(CancellationToken ct)
+    {
 
         var request = new HttpRequestMessage(HttpMethod.Post, $"{_options.BaseUrl}/token");
         var basicAuth = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_options.ClientId}:{_options.ClientSecret}"));
@@ -79,6 +100,31 @@ public sealed class GlpiClient(HttpClient http, IOptions<GlpiOptions> optionsAcc
     public Task<List<GlpiAsset>> GetComputersAsync(CancellationToken ct = default) => GetAssetsAsync(_options.ComputerEndpoint, "máy tính", ct);
 
     public Task<List<GlpiAsset>> GetPhonesAsync(CancellationToken ct = default) => GetAssetsAsync(_options.PhoneEndpoint, "điện thoại", ct);
+
+    public Task<List<GlpiAsset>> GetMonitorsAsync(CancellationToken ct = default) => GetAssetsAsync(_options.MonitorEndpoint, "màn hình", ct);
+
+    public async Task<List<GlpiAsset>> GetTabletsAsync(CancellationToken ct = default)
+    {
+        var endpoint = Blank(_options.TabletEndpoint);
+        if (endpoint is null)
+        {
+            if (!IsConfigured)
+                throw new InvalidOperationException("Chưa cấu hình kết nối GLPI (thiếu BaseUrl/ClientId/Username/Password trong appsettings).");
+            var prefix = VersionPrefix();
+            var custom = (await LoadSpecPathsAsync(prefix, ct))
+                .Select(p => Regex.Match(p, @"/Assets/Custom/([^/{}]+)$", RegexOptions.IgnoreCase))
+                .Where(m => m.Success)
+                .ToList();
+            var found = custom.FirstOrDefault(m => m.Groups[1].Value.Replace("_", "").Replace("-", "").Contains("tablet", StringComparison.OrdinalIgnoreCase));
+            if (found is null)
+                throw new InvalidOperationException(custom.Count > 0
+                    ? $"Không tìm thấy loại tài sản máy tính bảng trong GLPI. Các loại tự định nghĩa có: {string.Join(", ", custom.Select(m => m.Groups[1].Value))}. Đặt Glpi:TabletEndpoint cho đúng."
+                    : "Không dò được đường dẫn máy tính bảng (Tablet Device) từ tài liệu API của GLPI. Đặt Glpi:TabletEndpoint, dạng /v2.3/Assets/Custom/<tên hệ thống>.");
+            var path = found.Value;
+            endpoint = path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? path : prefix + path;
+        }
+        return await GetAssetsAsync(endpoint, "máy tính bảng", ct);
+    }
 
     // GLPI chỉ trả tối đa `limit` dòng mỗi lần, nên phải lặp theo start cho tới khi hết. Dừng khi một trang không
     // thêm được id mới nào (phòng trường hợp máy chủ bỏ qua start/limit và trả lại trang đầu mãi).

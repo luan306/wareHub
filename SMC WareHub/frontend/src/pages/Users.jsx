@@ -146,7 +146,11 @@ export function Users() {
               value={form.password}
               onChange={(e) => setForm({ ...form, password: e.target.value })}
               required={!form.id}
+              minLength={form.id ? undefined : 10}
+              maxLength={128}
+              autoComplete="new-password"
             />
+            <small className="field-hint">{t('users.passwordRules')}</small>
 
             {formError && <div className="error-box">{formError}</div>}
 

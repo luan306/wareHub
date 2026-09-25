@@ -36,6 +36,8 @@ x-web: &web
   volumes:
     # nginx của image tự thay ${BACKEND_HOST} trong file mẫu này khi khởi động.
     - ./web.conf.template:/etc/nginx/templates/default.conf.template:ro
+    # Header bảo mật (CSP...) dùng chung với bản chạy nhanh: 1 file nguồn duy nhất ở frontend/.
+    - ../frontend/security-headers.conf:/etc/nginx/snippets/security-headers.conf:ro
 
 services:
   mysql:

@@ -1,0 +1,5 @@
+bin/
+obj/
+# Không đưa mật khẩu/khoá thật vào image Docker
+appsettings.Development.json
+*.log
