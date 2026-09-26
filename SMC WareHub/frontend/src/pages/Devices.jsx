@@ -33,6 +33,13 @@ const COLUMN_DEFS = [
   { key: 'ghi_chu', labelKey: 'field.ghi_chu', cell: (d) => d.ghi_chu || '—' },
   { key: 'registered_at', labelKey: 'field.date', cell: (d) => (d.registered_at ? d.registered_at.slice(0, 10) : '—') },
 ];
+// Chữ trên nút khi đang đồng bộ: giai đoạn hiện tại và số máy đã xong.
+function syncProgressLabel(progress, t) {
+  if (!progress?.phase) return t('dev.syncing');
+  const phase = t(`dev.syncPhase.${progress.phase}`);
+  return progress.total > 0 ? `${phase} ${progress.done}/${progress.total}` : phase;
+}
+
 const COLUMN_STORAGE_KEY = 'warehub-devices-columns';
 
 function loadColumnVisibility() {
@@ -113,6 +120,8 @@ export function Devices() {
   const [khoConflict, setKhoConflict] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [syncingGlpi, setSyncingGlpi] = useState(false);
+  const syncFollowing = useRef(false);
+  const [syncProgress, setSyncProgress] = useState(null); // { phase, done, total } từ máy chủ
   const requestVersion = useRef(0);
 
   const fetchDevices = useCallback(async () => {
@@ -334,33 +343,69 @@ export function Devices() {
     }
   }
 
-  async function syncFromGlpi() {
-    if (!confirm(t('dev.confirmSync'))) return;
+  // Kết quả đồng bộ (thông báo cuối cùng cho người dùng).
+  function showSyncResult(result) {
+    const lines = [
+      t('dev.syncDone', { created: result.created, updated: result.updated, unchanged: result.unchanged }),
+      t('dev.syncFetched', { computers: result.computers, phones: result.phones }),
+    ];
+    if (result.skipped) lines.push(t('dev.syncSkipped', { count: result.skipped }));
+    if (result.skipped_names?.length > 0) lines.push(t('dev.syncSkippedNames', { names: result.skipped_names.join(', '), more: result.skipped > result.skipped_names.length ? '…' : '' }));
+    if (result.duplicates) lines.push(t('dev.syncDuplicates', { count: result.duplicates }));
+    if (result.tablets || result.monitors) lines.push(t('dev.syncFetchedMore', { tablets: result.tablets ?? 0, monitors: result.monitors ?? 0 }));
+    if (result.phone_error) lines.push(t('dev.syncPhoneError', { error: translateServerMessage(result.phone_error) }));
+    if (result.tablet_error) lines.push(t('dev.syncTabletError', { error: translateServerMessage(result.tablet_error) }));
+    if (result.monitor_error) lines.push(t('dev.syncMonitorError', { error: translateServerMessage(result.monitor_error) }));
+    lines.push(t('dev.syncDetailed', { count: result.detailed ?? 0 }));
+    (result.detail_warnings || []).forEach((w) => lines.push(`⚠ ${translateServerMessage(w)}`));
+    alert(lines.join('\n'));
+    fetchDevices();
+  }
+
+  // Đồng bộ chạy nền trên máy chủ: hỏi tiến độ định kỳ tới khi xong (bấm đồng bộ xong tải lại trang vẫn theo dõi tiếp được).
+  async function followGlpiSync() {
+    if (syncFollowing.current) return; // chỉ 1 vòng theo dõi tại 1 thời điểm (tránh hiện kết quả 2 lần)
+    syncFollowing.current = true;
     setSyncingGlpi(true);
     setError('');
     try {
-      const result = await api.post('/devices/glpi-sync', {});
-      const lines = [
-        t('dev.syncDone', { created: result.created, updated: result.updated, unchanged: result.unchanged }),
-        t('dev.syncFetched', { computers: result.computers, phones: result.phones }),
-      ];
-      if (result.skipped) lines.push(t('dev.syncSkipped', { count: result.skipped }));
-      if (result.skipped_names?.length > 0) lines.push(t('dev.syncSkippedNames', { names: result.skipped_names.join(', '), more: result.skipped > result.skipped_names.length ? '…' : '' }));
-      if (result.duplicates) lines.push(t('dev.syncDuplicates', { count: result.duplicates }));
-      if (result.tablets || result.monitors) lines.push(t('dev.syncFetchedMore', { tablets: result.tablets ?? 0, monitors: result.monitors ?? 0 }));
-      if (result.phone_error) lines.push(t('dev.syncPhoneError', { error: translateServerMessage(result.phone_error) }));
-      if (result.tablet_error) lines.push(t('dev.syncTabletError', { error: translateServerMessage(result.tablet_error) }));
-      if (result.monitor_error) lines.push(t('dev.syncMonitorError', { error: translateServerMessage(result.monitor_error) }));
-      lines.push(t('dev.syncDetailed', { count: result.detailed ?? 0 }));
-      (result.detail_warnings || []).forEach((w) => lines.push(`⚠ ${translateServerMessage(w)}`));
-      alert(lines.join('\n'));
-      fetchDevices();
+      for (;;) {
+        const status = await api.get('/devices/glpi-sync/status');
+        setSyncProgress(status);
+        if (!status.running) {
+          if (status.error) setError(translateServerMessage(status.error));
+          else if (status.result) showSyncResult(status.result);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
     } catch (err) {
       setError(err.message);
     } finally {
+      syncFollowing.current = false;
       setSyncingGlpi(false);
+      setSyncProgress(null);
     }
   }
+
+  async function syncFromGlpi() {
+    if (!confirm(t('dev.confirmSync'))) return;
+    setError('');
+    try {
+      await api.post('/devices/glpi-sync', {});
+    } catch (err) {
+      setError(err.message);
+      return;
+    }
+    await followGlpiSync();
+  }
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    api.get('/devices/glpi-sync/status').then((status) => { if (status.running) followGlpiSync(); }).catch(() => {});
+    // chỉ chạy 1 lần khi mở trang: nếu máy chủ đang đồng bộ dở thì theo dõi tiếp
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function createBulkHandovers() {
     const chosen = devices.filter((d) => selected.has(d.id));
@@ -483,7 +528,7 @@ export function Devices() {
         <h2>{t('dev.title')}</h2>
         <div className="manage-actions">
           <button className="btn-secondary" type="button" onClick={exportInventory} disabled={exporting}>{exporting ? t('dev.exporting') : t('dev.exportInventory')}</button>
-          {isAdmin && <button className="btn-secondary" type="button" onClick={syncFromGlpi} disabled={syncingGlpi}>{syncingGlpi ? t('dev.syncing') : t('dev.syncGlpi')}</button>}
+          {isAdmin && <button className="btn-secondary" type="button" onClick={syncFromGlpi} disabled={syncingGlpi}>{syncingGlpi ? syncProgressLabel(syncProgress, t) : t('dev.syncGlpi')}</button>}
           {isAdmin && <button className="btn-primary" type="button" onClick={openCreateModal}>{t('dev.addNew')}</button>}
           <button className="btn-secondary" type="button" onClick={createBulkHandovers} disabled={selected.size === 0 || bulkHandoverBusy}>
             {bulkHandoverBusy ? t('dev.creatingSlips') : `${t('dev.createSlips')}${selected.size > 0 ? ` (${selected.size})` : ''}`}

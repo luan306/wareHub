@@ -192,15 +192,17 @@ public sealed partial class GlpiClient
         return ParseDetails(cpu.Result.Body, ram.Result.Body, hdd.Result.Body, net.Result.Body, os.Result.Body, software.Result.Body);
     }
 
-    /// <summary>SIM (số điện thoại + serial) của nhiều điện thoại, song song có giới hạn. Key = mã điện thoại trong GLPI.</summary>
-    public async Task<Dictionary<int, GlpiPhoneDetails>> GetDetailsForPhonesAsync(IEnumerable<int> glpiIds, GlpiDetailReport report, CancellationToken ct = default)
+    /// <summary>SIM (số điện thoại + serial) của nhiều điện thoại, song song có giới hạn. Key = mã điện thoại trong GLPI. progress(đã xong, tổng) được gọi sau mỗi máy.</summary>
+    public async Task<Dictionary<int, GlpiPhoneDetails>> GetDetailsForPhonesAsync(IEnumerable<int> glpiIds, GlpiDetailReport report, Action<int, int>? progress = null, CancellationToken ct = default)
     {
         _sourceFailures.Clear();
         _sourceSuccesses.Clear();
         await EnsureEndpointsAsync(true, ct);
         var results = new ConcurrentDictionary<int, GlpiPhoneDetails>();
+        var ids = glpiIds.Distinct().ToList();
+        var completed = 0;
         using var gate = new SemaphoreSlim(Math.Clamp(_options.DetailConcurrency, 1, 20));
-        await Task.WhenAll(glpiIds.Distinct().Select(async id =>
+        await Task.WhenAll(ids.Select(async id =>
         {
             await gate.WaitAsync(ct);
             try
@@ -209,24 +211,26 @@ public sealed partial class GlpiClient
                 var (number, serial) = GlpiParsers.Sim(sim.Body);
                 results[id] = new GlpiPhoneDetails(number, serial);
             }
-            finally { gate.Release(); }
+            finally { gate.Release(); progress?.Invoke(Interlocked.Increment(ref completed), ids.Count); }
         }));
         return new Dictionary<int, GlpiPhoneDetails>(results);
     }
 
-    /// <summary>Lấy chi tiết cho nhiều máy, song song có giới hạn (Glpi:DetailConcurrency). Key = mã máy trong GLPI.</summary>
-    public async Task<Dictionary<int, GlpiComputerDetails>> GetDetailsForComputersAsync(IEnumerable<int> glpiIds, GlpiDetailReport report, CancellationToken ct = default)
+    /// <summary>Lấy chi tiết cho nhiều máy, song song có giới hạn (Glpi:DetailConcurrency). Key = mã máy trong GLPI. progress(đã xong, tổng) được gọi sau mỗi máy.</summary>
+    public async Task<Dictionary<int, GlpiComputerDetails>> GetDetailsForComputersAsync(IEnumerable<int> glpiIds, GlpiDetailReport report, Action<int, int>? progress = null, CancellationToken ct = default)
     {
         _sourceFailures.Clear();
         _sourceSuccesses.Clear();
         await EnsureEndpointsAsync(true, ct);
         var results = new ConcurrentDictionary<int, GlpiComputerDetails>();
+        var ids = glpiIds.Distinct().ToList();
+        var completed = 0;
         using var gate = new SemaphoreSlim(Math.Clamp(_options.DetailConcurrency, 1, 20));
-        await Task.WhenAll(glpiIds.Distinct().Select(async id =>
+        await Task.WhenAll(ids.Select(async id =>
         {
             await gate.WaitAsync(ct);
             try { results[id] = await GetComputerDetailsAsync(id, report, ct); }
-            finally { gate.Release(); }
+            finally { gate.Release(); progress?.Invoke(Interlocked.Increment(ref completed), ids.Count); }
         }));
         return new Dictionary<int, GlpiComputerDetails>(results);
     }

@@ -195,6 +195,8 @@ export const serverMessages = {
     'Mật khẩu quá phổ biến, hãy chọn mật khẩu khác': 'Password is too common, choose another one',
     'Không thể tự đổi vai trò hoặc tự khoá chính mình': 'You cannot change your own role or lock your own account',
     'Phiên đăng nhập không còn hiệu lực, vui lòng đăng nhập lại': 'Your session is no longer valid, please sign in again',
+    'Đang có một lần đồng bộ GLPI chạy, vui lòng chờ nó xong.': 'A GLPI sync is already running, please wait for it to finish.',
+    'Lỗi không mong muốn khi đồng bộ GLPI, xem nhật ký máy chủ.': 'Unexpected error during GLPI sync, see the server log.',
     'Yêu cầu không hợp lệ': 'Invalid request',
     'Dữ liệu gửi lên quá lớn': 'The submitted data is too large',
     'Vai trò không hợp lệ': 'Invalid role',
