@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo } from 'react';
 import { api } from '../api/client';
 
 const AuthContext = createContext(null);
@@ -23,11 +23,10 @@ export function AuthProvider({ children }) {
     setUser(null);
   }, []);
 
-  return (
-    <AuthContext.Provider value={{ user, login, logout, isAdmin: user?.role === 'admin' }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  // Ghi nhớ (useMemo): không tạo object mới mỗi lần render, tránh vẽ lại mọi nơi dùng useAuth() một cách vô ích.
+  const value = useMemo(() => ({ user, login, logout, isAdmin: user?.role === 'admin' }), [user, login, logout]);
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

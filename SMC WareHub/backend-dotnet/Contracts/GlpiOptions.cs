@@ -45,10 +45,10 @@ public sealed class GlpiOptions
     public string? SoftwareEndpoint { get; set; }
 
     /// <summary>
-    /// Đường dẫn lấy SIM đang gắn trong 1 điện thoại ({id} là mã điện thoại trong GLPI). Để trống thì tự dò từ tài liệu API
-    /// (tìm mục Simcard dưới /Assets/Phone/{id}/...). SIM cho ra số điện thoại (từ Line) và serial ICCID.
+    /// Đường dẫn lấy TOÀN BỘ danh sách SIM trong GLPI (không phải của riêng 1 máy — mỗi SIM khớp với điện thoại theo
+    /// người đang dùng, xem GlpiClient.GetSimcardsAsync). Để trống thì tự dò từ tài liệu API (tìm mục có chữ "simcard").
     /// </summary>
-    public string? SimcardEndpoint { get; set; }
+    public string? SimcardListEndpoint { get; set; }
 
     /// <summary>Tắt (false) nếu chỉ muốn đồng bộ danh sách, không lấy chi tiết từng máy (nhanh hơn nhưng không có CPU/RAM/IP).</summary>
     public bool SyncDetails { get; set; } = true;

@@ -527,11 +527,17 @@ export function HandoverModal({ device, saved, onClose }) {
     onClose();
   }
 
+  // Thiếu mảng dependency thì effect này chạy lại (gỡ + gắn listener) sau MỖI lần render, kể cả mỗi lần gõ phím vào form —
+  // dùng ref giữ giá trị mới nhất để chỉ cần đăng ký 1 lần lúc mở phiếu (mount), không lặp lại mỗi lần data đổi.
+  const pickerOpenRef = useRef(pickerOpen);
+  pickerOpenRef.current = pickerOpen;
+  const handleCloseRef = useRef(handleClose);
+  handleCloseRef.current = handleClose;
   useEffect(() => {
-    const onKey = (event) => { if (event.key === 'Escape' && !pickerOpen) handleClose(); };
+    const onKey = (event) => { if (event.key === 'Escape' && !pickerOpenRef.current) handleCloseRef.current(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  });
+  }, []);
 
   // Giữ lại phần đang gõ dở (kể cả khi lỡ đóng hộp thoại hoặc tải lại trang).
   useEffect(() => {

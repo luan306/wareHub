@@ -22,6 +22,25 @@ public sealed class GlpiAsset
     public GlpiRef? Model { get; set; }
     public GlpiRef? Type { get; set; }
     public GlpiRef? Location { get; set; }
+    // "Delivery form" của máy tính trong GLPI (nếu có) — công ty dùng số này làm số phiếu bàn giao từ trước khi có WareHub.
+    public string? Deliveryform { get; set; }
+    // Mọi trường JSON không khớp property nào ở trên (vd SIM có "msin" — Mobile Subscriber Identification Number — không
+    // có sẵn chỗ chứa riêng): giữ lại thô để đọc thử theo nhiều tên trường khác nhau bằng ExtraString, không cần biết
+    // trước chính xác GLPI đặt tên gì.
+    [System.Text.Json.Serialization.JsonExtensionData]
+    public Dictionary<string, JsonElement>? Extra { get; set; }
+
+    public string? ExtraString(string key)
+    {
+        if (Extra is null) return null;
+        foreach (var (k, v) in Extra)
+        {
+            if (!string.Equals(k, key, StringComparison.OrdinalIgnoreCase)) continue;
+            if (v.ValueKind == JsonValueKind.String) return v.GetString();
+            if (v.ValueKind == JsonValueKind.Number) return v.GetRawText();
+        }
+        return null;
+    }
 }
 
 /// <summary>
@@ -124,6 +143,31 @@ public sealed partial class GlpiClient(HttpClient http, IOptions<GlpiOptions> op
             endpoint = path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? path : prefix + path;
         }
         return await GetAssetsAsync(endpoint, "máy tính bảng", ct);
+    }
+
+    // SIM không gắn trực tiếp vào máy qua API (không có "/Assets/Phone/{id}/.../Simcard" đáng tin cậy — thử thì GLPI trả lỗi
+    // ở nhiều bản). Thay vào đó lấy TOÀN BỘ danh sách SIM 1 lần rồi khớp với điện thoại theo NGƯỜI ĐANG DÙNG (xem
+    // GlpiParsers.MatchPhonesByUser) — không cần biết đúng cấu trúc liên kết SIM↔điện thoại của từng bản GLPI.
+    public async Task<List<GlpiAsset>> GetSimcardsAsync(CancellationToken ct = default)
+    {
+        var endpoint = Blank(_options.SimcardListEndpoint);
+        if (endpoint is not null) return await GetAssetsAsync(endpoint, "SIM", ct);
+
+        if (!IsConfigured)
+            throw new InvalidOperationException("Chưa cấu hình kết nối GLPI (thiếu BaseUrl/ClientId/Username/Password trong appsettings).");
+        var prefix = VersionPrefix();
+        var discovered = (await LoadSpecPathsAsync(prefix, ct))
+            .Where(p => !p.Contains('{') && p.Contains("simcard", StringComparison.OrdinalIgnoreCase))
+            .Select(p => p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? p : prefix + p);
+        var candidates = discovered.Concat([$"{prefix}/Assets/Simcard", $"{prefix}/Assets/DeviceSimcard"]).Distinct().ToList();
+
+        List<string> errors = [];
+        foreach (var candidate in candidates)
+        {
+            try { return await GetAssetsAsync(candidate, "SIM", ct); }
+            catch (InvalidOperationException ex) { errors.Add($"{candidate}: {ex.Message}"); }
+        }
+        throw new InvalidOperationException($"Không tìm được danh sách SIM trong GLPI (đã thử: {string.Join(" | ", candidates)}). Đặt Glpi:SimcardListEndpoint cho đúng.");
     }
 
     // GLPI chỉ trả tối đa `limit` dòng mỗi lần, nên phải lặp theo start cho tới khi hết. Dừng khi một trang không

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo } from 'react';
 
 const PrintQueueContext = createContext(null);
 
@@ -19,11 +19,10 @@ export function PrintQueueProvider({ children }) {
 
   const clearQueue = useCallback(() => setQueue([]), []);
 
-  return (
-    <PrintQueueContext.Provider value={{ queue, addDevices, removeDevice, clearQueue }}>
-      {children}
-    </PrintQueueContext.Provider>
-  );
+  // Ghi nhớ (useMemo): không tạo object mới mỗi lần render, tránh vẽ lại mọi nơi dùng usePrintQueue() một cách vô ích.
+  const value = useMemo(() => ({ queue, addDevices, removeDevice, clearQueue }), [queue, addDevices, removeDevice, clearQueue]);
+
+  return <PrintQueueContext.Provider value={value}>{children}</PrintQueueContext.Provider>;
 }
 
 export function usePrintQueue() {

@@ -28,15 +28,19 @@ public sealed record GlpiProbeCall(string Source, string? Url, int Status, strin
 
 /// <summary>
 /// Lấy chi tiết từng máy tính từ GLPI: các bộ phận (bộ xử lý, RAM, ổ cứng), cổng mạng/IP, hệ điều hành, phần mềm.
-/// Đường dẫn lấy từ cấu hình; đường nào để trống thì dò trong tài liệu OpenAPI của GLPI (nếu tải được), không thấy thì thử
-/// đường dẫn mặc định. Nguồn nào lỗi liên tục sẽ bị bỏ qua cho phần còn lại của lần đồng bộ để không gọi hàng nghìn lần vô ích.
+/// Mỗi nguồn có THỂ có nhiều đường dẫn khả dĩ (candidate) — ví dụ "os" thử lần lượt "OperatingSystem" rồi
+/// "Component/OperatingSystem" rồi "Item_OperatingSystem" (các cách đặt tên khác nhau tuỳ bản GLPI) — dùng cái đầu tiên
+/// trả về thành công rồi ghi nhớ cho các lần gọi sau (không thử lại từ đầu mỗi lần). Nguồn nào lỗi liên tục sẽ bị bỏ qua
+/// cho phần còn lại của lần đồng bộ để không gọi hàng nghìn lần vô ích.
 /// </summary>
 public sealed partial class GlpiClient
 {
     private const int FailuresBeforeSkip = 5;
 
     private readonly SemaphoreSlim _endpointLock = new(1, 1);
-    private Dictionary<string, string?>? _endpoints;
+    private Dictionary<string, List<string>>? _endpointCandidates;
+    // Đường dẫn đã xác nhận dùng được cho mỗi nguồn (key) trong lần đồng bộ này — gọi thẳng, không thử lại các candidate khác.
+    private readonly ConcurrentDictionary<string, string> _confirmedEndpoint = new();
     private string? _specUrl;
     private readonly ConcurrentDictionary<string, int> _sourceFailures = new();
     private readonly ConcurrentDictionary<string, int> _sourceSuccesses = new();
@@ -49,57 +53,62 @@ public sealed partial class GlpiClient
         return index > 0 ? _options.ComputerEndpoint[..index] : "";
     }
 
+    // Tên gọi khác nhau của cùng 1 khái niệm, dùng để nhận diện đường dẫn phù hợp trong tài liệu API (nếu tải được).
+    // Không có "net" và "os": bản GLPI của công ty không có route nào lấy IP hay hệ điều hành của Computer qua REST API
+    // (đã thử OperatingSystem/Component/OperatingSystem/Item_OperatingSystem, cả 3 đều 404 trên dữ liệu thật) nên không
+    // tự dò/đoán nữa, tránh gọi phí công + hiện cảnh báo mỗi lần đồng bộ. Muốn bật lại (bản GLPI khác có hỗ trợ) thì đặt
+    // thẳng Glpi:NetworkPortEndpoint / Glpi:OperatingSystemEndpoint.
     private static readonly (string Key, string[] Names)[] DiscoveredSources =
     [
-        ("net", ["NetworkPort", "NetworkPorts", "IPAddress", "IPAddresses", "NetworkName", "NetworkNames"]),
-        ("os", ["OperatingSystem", "OperatingSystems", "OS"]),
-        ("software", ["Software", "Softwares", "SoftwareVersion", "SoftwareVersions"]),
+        ("software", ["SoftwareInstallation", "SoftwareInstallations", "Software", "Softwares", "SoftwareVersion", "SoftwareVersions", "Item_SoftwareVersion", "Item_SoftwareVersions"]),
     ];
+
+    // Không dò được từ tài liệu API (hoặc tài liệu không tải được) thì thử lần lượt các cách đặt tên phổ biến của GLPI,
+    // từ "chuẩn" nhất tới các biến thể ít gặp hơn.
+    private static readonly Dictionary<string, string[]> FallbackTemplates = new()
+    {
+        ["software"] = ["/Assets/Computer/{id}/SoftwareInstallation", "/Assets/Computer/{id}/Software", "/Assets/Computer/{id}/Component/Software", "/Assets/Computer/{id}/Item_SoftwareVersion", "/Assets/Computer/{id}/SoftwareVersion"],
+    };
 
     private async Task EnsureEndpointsAsync(bool refresh, CancellationToken ct)
     {
-        if (_endpoints is not null && !refresh) return;
+        if (_endpointCandidates is not null && !refresh) return;
         await _endpointLock.WaitAsync(ct);
         try
         {
-            if (_endpoints is not null && !refresh) return;
+            if (_endpointCandidates is not null && !refresh) return;
             var prefix = VersionPrefix();
-            var map = new Dictionary<string, string?>
+            var map = new Dictionary<string, List<string>>
             {
-                ["cpu"] = Blank(_options.ProcessorEndpoint),
-                ["ram"] = Blank(_options.MemoryEndpoint),
-                ["hdd"] = Blank(_options.HardDriveEndpoint),
-                ["net"] = Blank(_options.NetworkPortEndpoint),
-                ["os"] = Blank(_options.OperatingSystemEndpoint),
-                ["software"] = Blank(_options.SoftwareEndpoint),
-                ["sim"] = Blank(_options.SimcardEndpoint),
+                ["cpu"] = [_options.ProcessorEndpoint],
+                ["ram"] = [_options.MemoryEndpoint],
+                ["hdd"] = [_options.HardDriveEndpoint],
             };
-            if (map.Where(kv => kv.Key != "sim").Any(kv => kv.Value is null))
+            // "net"/"os" chỉ chạy khi admin tự đặt thẳng đường dẫn (đã xác nhận bản GLPI mặc định không có route nào cho
+            // IP/hệ điều hành của Computer) — không có thì để rỗng, FetchSourceAsync bỏ qua ngay, không tốn cuộc gọi và
+            // không báo cảnh báo.
+            map["net"] = Blank(_options.NetworkPortEndpoint) is { } netEndpoint ? [netEndpoint] : [];
+            map["os"] = Blank(_options.OperatingSystemEndpoint) is { } osEndpoint ? [osEndpoint] : [];
+            var explicitValues = new Dictionary<string, string?>
             {
-                var paths = await LoadSpecPathsAsync(prefix, ct);
-                foreach (var (key, names) in DiscoveredSources)
-                {
-                    if (map[key] is not null) continue;
-                    map[key] = paths.Select(p => new { Path = p, Match = Regex.Match(p, @"/Assets/Computer/\{[^}]+\}/([^/]+)$", RegexOptions.IgnoreCase) })
-                        .Where(x => x.Match.Success && names.Contains(x.Match.Groups[1].Value, StringComparer.OrdinalIgnoreCase))
-                        .OrderBy(x => Array.FindIndex(names, n => n.Equals(x.Match.Groups[1].Value, StringComparison.OrdinalIgnoreCase)))
-                        .Select(x => x.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? x.Path : prefix + x.Path)
-                        .FirstOrDefault()
-                        // Không dò được (không tải được tài liệu API): thử tên chuẩn của GLPI.
-                        ?? $"{prefix}/Assets/Computer/{{id}}/{names[0]}";
-                }
-            }
-            if (map["sim"] is null)
+                ["software"] = Blank(_options.SoftwareEndpoint),
+            };
+            List<string>? specPaths = null;
+            foreach (var (key, names) in DiscoveredSources)
             {
-                var simNames = new[] { "Simcard", "SimCard", "Simcards", "SimCards", "DeviceSimcard" };
-                var paths = await LoadSpecPathsAsync(prefix, ct);
-                map["sim"] = paths.Select(p => new { Path = p, Match = Regex.Match(p, @"/Assets/Phone/\{[^}]+\}/(?:Component/)?([^/]+)$", RegexOptions.IgnoreCase) })
-                    .Where(x => x.Match.Success && simNames.Contains(x.Match.Groups[1].Value, StringComparer.OrdinalIgnoreCase))
-                    .Select(x => x.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? x.Path : prefix + x.Path)
-                    .FirstOrDefault()
-                    ?? $"{prefix}/Assets/Phone/{{id}}/Component/Simcard";
+                if (explicitValues[key] is { } explicitEndpoint) { map[key] = [explicitEndpoint]; continue; }
+                specPaths ??= await LoadSpecPathsAsync(prefix, ct);
+                var discovered = specPaths
+                    .Select(p => new { Path = p, Match = Regex.Match(p, @"/Assets/Computer/\{[^}]+\}/([^/]+)$", RegexOptions.IgnoreCase) })
+                    .Where(x => x.Match.Success && names.Contains(x.Match.Groups[1].Value, StringComparer.OrdinalIgnoreCase))
+                    .OrderBy(x => Array.FindIndex(names, n => n.Equals(x.Match.Groups[1].Value, StringComparison.OrdinalIgnoreCase)))
+                    .Select(x => x.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? x.Path : prefix + x.Path);
+                var fallbacks = FallbackTemplates[key].Select(t => prefix + t);
+                map[key] = discovered.Concat(fallbacks).Distinct().ToList();
             }
-            _endpoints = map;
+            _endpointCandidates = map;
+            // Cấu hình có thể vừa được admin sửa lại — thử lại từ đầu thay vì cứ dùng mãi đường dẫn đã xác nhận trước đó.
+            if (refresh) _confirmedEndpoint.Clear();
         }
         finally
         {
@@ -138,13 +147,9 @@ public sealed partial class GlpiClient
 
     private static readonly Regex IdPlaceholder = new(@"\{[^}]+\}", RegexOptions.Compiled);
 
-    // Gọi 1 nguồn chi tiết của 1 máy. Trả về null nếu nguồn không có/lỗi (đã ghi cảnh báo, không ném lỗi).
-    private async Task<(JsonElement? Body, int Status, string? Url)> FetchSourceAsync(string key, int glpiId, GlpiDetailReport? report, CancellationToken ct)
+    // 1 lần gọi thật sự tới GLPI cho ĐÚNG 1 đường dẫn (không thử candidate khác); tự xin lại token nếu bị 401 một lần.
+    private async Task<(JsonElement? Body, int Status, string Url)> FetchOneAsync(string template, int glpiId, CancellationToken ct)
     {
-        var template = _endpoints![key];
-        if (template is null) return (null, 0, null);
-        if (_sourceFailures.GetValueOrDefault(key) >= FailuresBeforeSkip && _sourceSuccesses.GetValueOrDefault(key) == 0) return (null, 0, template);
-
         var url = $"{_options.BaseUrl}{IdPlaceholder.Replace(template, glpiId.ToString(), 1)}";
         for (var attempt = 0; attempt < 2; attempt++)
         {
@@ -156,24 +161,63 @@ public sealed partial class GlpiClient
                 request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
                 using var response = await http.SendAsync(request, ct);
                 if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized && attempt == 0) { InvalidateToken(); continue; }
-                if (!response.IsSuccessStatusCode)
-                {
-                    _sourceFailures.AddOrUpdate(key, 1, (_, n) => n + 1);
-                    report?.Warn(key, $"GLPI trả HTTP {(int)response.StatusCode} ở {template} — bỏ qua nguồn này. Kiểm tra/đặt lại đường dẫn trong cấu hình Glpi.");
-                    return (null, (int)response.StatusCode, url);
-                }
+                if (!response.IsSuccessStatusCode) return (null, (int)response.StatusCode, url);
                 using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
-                _sourceSuccesses.AddOrUpdate(key, 1, (_, n) => n + 1);
                 return (doc.RootElement.Clone(), (int)response.StatusCode, url);
             }
             catch (Exception exception) when (exception is HttpRequestException or JsonException or TaskCanceledException && !ct.IsCancellationRequested)
             {
-                _sourceFailures.AddOrUpdate(key, 1, (_, n) => n + 1);
-                report?.Warn(key, $"Lỗi khi gọi {template}: {exception.Message}");
                 return (null, 0, url);
             }
         }
         return (null, 401, url);
+    }
+
+    // Gọi 1 nguồn chi tiết của 1 máy: nguồn đã xác nhận thì gọi thẳng; chưa thì thử lần lượt các candidate tới khi có 1 cái
+    // thành công (HTTP 2xx) rồi ghi nhớ cho các máy sau. 404 thì thử candidate kế tiếp; lỗi khác (500, mất mạng...) thì
+    // dừng và báo luôn — lỗi đó không tự hết khi đổi đường dẫn.
+    private async Task<(JsonElement? Body, int Status, string? Url)> FetchSourceAsync(string key, int glpiId, GlpiDetailReport? report, CancellationToken ct)
+    {
+        if (_confirmedEndpoint.TryGetValue(key, out var confirmed))
+        {
+            var (body, status, url) = await FetchOneAsync(confirmed, glpiId, ct);
+            if (body is null) { _sourceFailures.AddOrUpdate(key, 1, (_, n) => n + 1); report?.Warn(key, $"GLPI trả HTTP {status} ở {confirmed} — bỏ qua nguồn này. Kiểm tra/đặt lại đường dẫn trong cấu hình Glpi."); }
+            return (body, status, url);
+        }
+
+        var candidates = _endpointCandidates?.GetValueOrDefault(key) ?? [];
+        if (candidates.Count == 0) return (null, 0, null);
+        if (_sourceFailures.GetValueOrDefault(key) >= FailuresBeforeSkip && _sourceSuccesses.GetValueOrDefault(key) == 0) return (null, 0, candidates[0]);
+
+        var tried = new List<string>();
+        foreach (var template in candidates)
+        {
+            var (body, status, url) = await FetchOneAsync(template, glpiId, ct);
+            tried.Add($"{template} (HTTP {status})");
+            if (body is not null)
+            {
+                _confirmedEndpoint[key] = template;
+                _sourceSuccesses.AddOrUpdate(key, 1, (_, n) => n + 1);
+                return (body, status, url);
+            }
+            if (status is not (404 or 0)) // lỗi khác 404: nguồn có tồn tại nhưng đang lỗi, đổi đường dẫn khác cũng vô ích
+            {
+                _sourceFailures.AddOrUpdate(key, 1, (_, n) => n + 1);
+                report?.Warn(key, $"GLPI trả HTTP {status} ở {template} — bỏ qua nguồn này. Kiểm tra/đặt lại đường dẫn trong cấu hình Glpi.");
+                return (null, status, url);
+            }
+            if (status == 0)
+            {
+                _sourceFailures.AddOrUpdate(key, 1, (_, n) => n + 1);
+                report?.Warn(key, $"Lỗi khi gọi {template} (mất kết nối hoặc quá thời gian chờ).");
+                return (null, 0, url);
+            }
+        }
+        _sourceFailures.AddOrUpdate(key, 1, (_, n) => n + 1);
+        report?.Warn(key, candidates.Count > 1
+            ? $"GLPI không có đường dẫn nào khớp cho '{key}' — đã thử: {string.Join("; ", tried)}. Đặt đúng đường dẫn trong cấu hình Glpi."
+            : $"GLPI trả HTTP 404 ở {candidates[0]} — bỏ qua nguồn này. Kiểm tra/đặt lại đường dẫn trong cấu hình Glpi.");
+        return (null, 404, candidates[^1]);
     }
 
     private GlpiComputerDetails ParseDetails(JsonElement? cpu, JsonElement? ram, JsonElement? hdd, JsonElement? net, JsonElement? os, JsonElement? software) =>
@@ -190,30 +234,6 @@ public sealed partial class GlpiClient
         var software = FetchSourceAsync("software", glpiId, report, ct);
         await Task.WhenAll(cpu, ram, hdd, net, os, software);
         return ParseDetails(cpu.Result.Body, ram.Result.Body, hdd.Result.Body, net.Result.Body, os.Result.Body, software.Result.Body);
-    }
-
-    /// <summary>SIM (số điện thoại + serial) của nhiều điện thoại, song song có giới hạn. Key = mã điện thoại trong GLPI. progress(đã xong, tổng) được gọi sau mỗi máy.</summary>
-    public async Task<Dictionary<int, GlpiPhoneDetails>> GetDetailsForPhonesAsync(IEnumerable<int> glpiIds, GlpiDetailReport report, Action<int, int>? progress = null, CancellationToken ct = default)
-    {
-        _sourceFailures.Clear();
-        _sourceSuccesses.Clear();
-        await EnsureEndpointsAsync(true, ct);
-        var results = new ConcurrentDictionary<int, GlpiPhoneDetails>();
-        var ids = glpiIds.Distinct().ToList();
-        var completed = 0;
-        using var gate = new SemaphoreSlim(Math.Clamp(_options.DetailConcurrency, 1, 20));
-        await Task.WhenAll(ids.Select(async id =>
-        {
-            await gate.WaitAsync(ct);
-            try
-            {
-                var sim = await FetchSourceAsync("sim", id, report, ct);
-                var (number, serial) = GlpiParsers.Sim(sim.Body);
-                results[id] = new GlpiPhoneDetails(number, serial);
-            }
-            finally { gate.Release(); progress?.Invoke(Interlocked.Increment(ref completed), ids.Count); }
-        }));
-        return new Dictionary<int, GlpiPhoneDetails>(results);
     }
 
     /// <summary>Lấy chi tiết cho nhiều máy, song song có giới hạn (Glpi:DetailConcurrency). Key = mã máy trong GLPI. progress(đã xong, tổng) được gọi sau mỗi máy.</summary>
@@ -235,18 +255,6 @@ public sealed partial class GlpiClient
         return new Dictionary<int, GlpiComputerDetails>(results);
     }
 
-    /// <summary>Công cụ kiểm tra SIM của 1 điện thoại: đường dẫn đang dùng, phản hồi thô và số điện thoại/serial đọc được.</summary>
-    public async Task<object> ProbePhoneAsync(int glpiId, CancellationToken ct = default)
-    {
-        _sourceFailures.Clear();
-        _sourceSuccesses.Clear();
-        await EnsureEndpointsAsync(true, ct);
-        var report = new GlpiDetailReport();
-        var sim = await FetchSourceAsync("sim", glpiId, report, ct);
-        var (number, serial) = GlpiParsers.Sim(sim.Body);
-        return new { spec_url = _specUrl, endpoint = _endpoints!["sim"], url = sim.Url, status = sim.Status, preview = GlpiParsers.Preview(sim.Body, 1500), parsed = new { phone_number = number, sim_serial = serial }, warnings = report.Warnings };
-    }
-
     /// <summary>Công cụ kiểm tra cho admin: gọi mọi nguồn chi tiết của 1 máy và trả về phản hồi thô + kết quả đã đọc.</summary>
     public async Task<GlpiProbeResult> ProbeComputerAsync(int glpiId, CancellationToken ct = default)
     {
@@ -259,6 +267,29 @@ public sealed partial class GlpiClient
         var byKey = fetched.ToDictionary(x => x.Key, x => x.Result);
         var calls = fetched.Select(x => new GlpiProbeCall(x.Key, x.Result.Url, x.Result.Status, GlpiParsers.Preview(x.Result.Body, 1200))).ToList();
         var parsed = ParseDetails(byKey["cpu"].Body, byKey["ram"].Body, byKey["hdd"].Body, byKey["net"].Body, byKey["os"].Body, byKey["software"].Body);
-        return new GlpiProbeResult(_specUrl, new Dictionary<string, string?>(_endpoints!), calls, parsed);
+        var endpointsView = keys.ToDictionary(k => k, string? (k) => _confirmedEndpoint.TryGetValue(k, out var c) ? c : _endpointCandidates?.GetValueOrDefault(k)?.FirstOrDefault());
+        return new GlpiProbeResult(_specUrl, endpointsView, calls, parsed);
+    }
+
+    /// <summary>Công cụ kiểm tra cho admin: liệt kê đường dẫn thật trong tài liệu API của GLPI có chứa 1 từ khoá (không phân
+    /// biệt hoa/thường) — dùng khi các đường dẫn tự đoán (net/os/software) đều sai, để biết tên chuẩn GLPI đang dùng.</summary>
+    public async Task<object> ProbeSpecPathsAsync(string? keyword, CancellationToken ct = default)
+    {
+        var prefix = VersionPrefix();
+        var paths = await LoadSpecPathsAsync(prefix, ct);
+        var matched = string.IsNullOrWhiteSpace(keyword) ? paths : paths.Where(p => p.Contains(keyword, StringComparison.OrdinalIgnoreCase)).ToList();
+        return new { spec_url = _specUrl, total_paths = paths.Count, matched };
+    }
+
+    /// <summary>Công cụ kiểm tra cho admin: xem thô vài dòng đầu của danh sách SIM (để đối chiếu tên trường thật, vd MSISDN).</summary>
+    public async Task<object> ProbeSimcardsAsync(CancellationToken ct = default)
+    {
+        var simcards = await GetSimcardsAsync(ct);
+        return new
+        {
+            endpoint = Blank(_options.SimcardListEndpoint) ?? "(tự dò)",
+            total = simcards.Count,
+            sample = simcards.Take(5).Select(s => new { s.Id, s.Name, s.Serial, user = s.User?.Name, extra_keys = s.Extra?.Keys.ToList() ?? [] }),
+        };
     }
 }

@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { connectionEvents } from '../api/connection';
 import { useAuth } from './AuthContext';
@@ -154,7 +154,10 @@ export function ConnectionProvider({ children }) {
     setServer({ state: 'ok' });
   }, []);
 
-  const value = {
+  // Object mới mỗi lần render sẽ làm MỌI nơi dùng useConnection() vẽ lại theo — kể cả khi giá trị thực chất không đổi.
+  // Provider này bọc cả app và tự kiểm tra định kỳ (mỗi 30 giây khi bình thường), nên không nhớ lại (useMemo) sẽ khiến
+  // toàn bộ cây component vẽ lại theo đúng chu kỳ đó dù đang mở màn hình gì (từng gây giật khi đang xem/sửa phiếu bàn giao).
+  const value = useMemo(() => ({
     status,
     loginNotice,
     dismissMaintenance,
@@ -165,7 +168,7 @@ export function ConnectionProvider({ children }) {
     maintenanceInfo,
     retryNow: checkNow,
     setMaintenance,
-  };
+  }), [status, loginNotice, dismissMaintenance, server, notice, newVersion, checking, maintenanceInfo, checkNow, setMaintenance]);
   return <ConnectionContext.Provider value={value}>{children}</ConnectionContext.Provider>;
 }
 

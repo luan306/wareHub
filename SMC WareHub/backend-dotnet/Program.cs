@@ -310,7 +310,23 @@ devices.MapGet("/history", async (string? search, string? from, string? to, int?
 // Kiểm tra kết nối chi tiết GLPI cho 1 máy: /api/devices/glpi-probe?id=<mã máy trong GLPI, thấy trên URL: computer.form.php?id=227>.
 // Trả về đường dẫn đang dùng, phản hồi thô của từng nguồn và giá trị đã đọc được — dùng để chỉnh cấu hình Glpi khi khác bản GLPI.
 devices.MapGet("/glpi-probe", (int id, HttpContext context, GlpiClient glpi) => GlpiProbeAsync(glpi, () => glpi.ProbeComputerAsync(id, context.RequestAborted))).RequireAuthorization("admin");
-devices.MapGet("/glpi-probe-phone", (int id, HttpContext context, GlpiClient glpi) => GlpiProbeAsync(glpi, () => glpi.ProbePhoneAsync(id, context.RequestAborted))).RequireAuthorization("admin");
+// Xem thô vài dòng đầu của danh sách SIM trong GLPI — dùng để đối chiếu tên trường thật (vd MSISDN) khi khớp SIM theo người dùng.
+devices.MapGet("/glpi-probe-simcards", (GlpiClient glpi, CancellationToken ct) => GlpiProbeAsync(glpi, () => glpi.ProbeSimcardsAsync(ct))).RequireAuthorization("admin");
+// Liệt kê đường dẫn thật trong tài liệu API của GLPI chứa từ khoá (vd ?q=software) — dùng khi các đường dẫn tự đoán đều sai.
+devices.MapGet("/glpi-probe-paths", (string? q, GlpiClient glpi, CancellationToken ct) => GlpiProbeAsync(glpi, () => glpi.ProbeSpecPathsAsync(q, ct))).RequireAuthorization("admin");
+// Thử lấy IP bằng cách đăng nhập giao diện web GLPI rồi đọc tab Network ports (API REST không có) — xem GlpiWebScrape.cs.
+// Trả về IP đọc được + đoạn HTML thô đầu tiên để đối chiếu bằng mắt xem tách đúng chưa.
+devices.MapGet("/glpi-probe-ip", (int id, GlpiClient glpi, CancellationToken ct) => GlpiProbeAsync(glpi, async () =>
+{
+    var (html, ip) = await glpi.FetchNetworkPortTabAsync(id, ct);
+    return new { ip, html_length = html.Length, html_preview = html.Length > 3000 ? html[..3000] + "…" : html };
+})).RequireAuthorization("admin");
+// Thử lấy "Delivery form" bằng cách đọc tab Infocom (thông tin quản lý/tài chính) — cũng không có trong REST API.
+devices.MapGet("/glpi-probe-delivery", (int id, GlpiClient glpi, CancellationToken ct) => GlpiProbeAsync(glpi, async () =>
+{
+    var (html, deliveryForm) = await glpi.FetchInfocomTabAsync(id, ct);
+    return new { delivery_form = deliveryForm, html_length = html.Length, html_preview = html.Length > 3000 ? html[..3000] + "…" : html };
+})).RequireAuthorization("admin");
 // Đồng bộ chạy nền (xem GlpiSyncJob): POST chỉ bắt đầu và trả lời ngay; GET /glpi-sync/status cho tiến độ và kết quả.
 devices.MapPost("/glpi-sync", (HttpContext context, GlpiClient glpi, GlpiSyncJob job, IServiceScopeFactory scopes, IHostApplicationLifetime lifetime) =>
 {
@@ -602,8 +618,15 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
     }
     if (glpi.DetailsEnabled && phones.Count > 0)
     {
-        try { phoneDetails = await glpi.GetDetailsForPhonesAsync(phones.Where(p => !string.IsNullOrWhiteSpace(p.Serial)).Select(p => p.Id), detailReport, (done, total) => job.Report("phones", done, total), ct); }
-        catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException) { detailReport.Warn("sim-all", $"Không lấy được SIM của điện thoại: {ex.Message}"); }
+        job.Report("phones");
+        // SIM không lấy theo từng máy nữa (nhiều bản GLPI không có đường dẫn liên kết trực tiếp đáng tin cậy) — lấy 1 lần
+        // toàn bộ danh sách SIM rồi khớp với điện thoại theo người đang dùng (GlpiParsers.MatchPhonesByUser).
+        try
+        {
+            var simcards = await glpi.GetSimcardsAsync(ct);
+            phoneDetails = GlpiParsers.MatchPhonesByUser(phones, simcards);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException) { detailReport.Warn("sim-all", $"Không lấy được danh sách SIM: {ex.Message}"); }
     }
     var detailed = 0;
     // Điền phần chi tiết riêng của từng loại (máy tính: cấu hình; điện thoại: SIM); true nếu GLPI có trả gì đó.
@@ -619,6 +642,9 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
     var seenSerials = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     int created = 0, updated = 0, unchanged = 0, skipped = 0, duplicates = 0;
     var skippedNames = new List<string>(); // tối đa 20 tên tài sản GLPI thiếu serial, để người dùng biết cần bổ sung ở đâu
+    // Trường "Delivery form" của máy tính trong GLPI: công ty dùng số này làm số phiếu bàn giao trước khi có WareHub (dạng
+    // giống Handover.No, vd "2601048"). Gom lại, tạo phiếu liên kết sau khi đã lưu thiết bị (để có Id thật cho máy mới).
+    var pendingLegacyHandovers = new List<(Device Device, string No)>();
 
     foreach (var (c, loai, kho) in assets)
     {
@@ -631,6 +657,7 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
         }
         if (!seenSerials.Add(serial)) { duplicates++; continue; }
 
+        Device device;
         if (existingBySerial.TryGetValue(serial, out var existing))
         {
             var before = SnapshotDevice(existing);
@@ -639,6 +666,7 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
             var changes = DiffDevice(before, SnapshotDevice(existing));
             RecordDeviceChanges(db, existing.Id, userId, changes);
             if (changes.Count > 0) updated++; else unchanged++;
+            device = existing;
         }
         else
         {
@@ -647,12 +675,29 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
             if (ApplyExtras(newDevice, loai, c.Id)) detailed++;
             db.Devices.Add(newDevice);
             created++;
+            device = newDevice;
         }
+        if (loai == "laptop" && Truncate(c.Deliveryform, 12) is { Length: > 0 } deliveryNo) pendingLegacyHandovers.Add((device, deliveryNo));
     }
 
     job.Report("saving");
     await db.SaveChangesAsync(CancellationToken.None);
-    job.Complete(new { ok = true, total = assets.Count, computers = computers.Count, phones = phones.Count, phone_error = phoneError, tablets = tablets.Count, tablet_error = tabletError, monitors = monitors.Count, monitor_error = monitorError, created, updated, unchanged, skipped, skipped_names = skippedNames, duplicates, detailed, detail_warnings = detailReport.Warnings });
+
+    // Chỉ tạo phiếu khi số đó CHƯA tồn tại — không bao giờ ghi đè phiếu đã có (kể cả phiếu người dùng tự tạo trùng số).
+    int legacyHandoversCreated = 0, legacyHandoversSkipped = 0;
+    if (pendingLegacyHandovers.Count > 0)
+    {
+        var existingNos = (await db.Handovers.Select(h => h.No).ToListAsync(CancellationToken.None)).ToHashSet();
+        foreach (var (device, no) in pendingLegacyHandovers)
+        {
+            if (!existingNos.Add(no)) { legacyHandoversSkipped++; continue; }
+            db.Handovers.Add(new Handover { No = no, DeviceId = device.Id, DeviceMa = device.Ma, FullName = Truncate(device.UserName, 100), UserId = userId });
+            legacyHandoversCreated++;
+        }
+        if (legacyHandoversCreated > 0) await db.SaveChangesAsync(CancellationToken.None);
+    }
+
+    job.Complete(new { ok = true, total = assets.Count, computers = computers.Count, phones = phones.Count, phone_error = phoneError, tablets = tablets.Count, tablet_error = tabletError, monitors = monitors.Count, monitor_error = monitorError, created, updated, unchanged, skipped, skipped_names = skippedNames, duplicates, detailed, detail_warnings = detailReport.Warnings, legacy_handovers_created = legacyHandoversCreated, legacy_handovers_skipped = legacyHandoversSkipped });
 }
 static IResult GlpiNotConfigured() => Results.BadRequest(new { error = "Chưa cấu hình kết nối GLPI. Thêm mục \"Glpi\" (BaseUrl, ClientId, ClientSecret, Username, Password) vào appsettings.Development.json." });
 // Chạy 1 lần kiểm tra GLPI cho admin: báo chưa cấu hình / lỗi kết nối bằng thông báo rõ ràng thay vì lỗi 500.

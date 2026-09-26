@@ -165,6 +165,43 @@ public static class GlpiParsers
         }
     }
 
+    private static readonly Regex IPv4Anywhere = new(@"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b", RegexOptions.Compiled);
+
+    // Tách IP từ HTML thô của tab "Network ports" (GlpiClient.FetchNetworkPortTabAsync — trang web GLPI, không phải JSON của
+    // REST API). Không có cấu trúc rõ ràng như JSON nên chỉ dò mọi chuỗi trông giống IPv4 trong trang, loại bỏ loopback/mặt
+    // nạ mạng/broadcast và những chỗ có nhãn "netmask"/"gateway"/"subnet" đứng ngay trước đó (đoán theo ngữ cảnh xung quanh).
+    public static string? ExtractIpFromHtml(string html)
+    {
+        var found = new List<string>();
+        foreach (Match match in IPv4Anywhere.Matches(html))
+        {
+            var text = match.Value;
+            if (text.StartsWith("127.") || text.StartsWith("169.254.") || text.StartsWith("255.") || text == "0.0.0.0") continue;
+            var contextStart = Math.Max(0, match.Index - 80);
+            var context = html[contextStart..match.Index].ToLowerInvariant();
+            if (NotAnAddressKeys.Any(context.Contains)) continue;
+            found.Add(text);
+        }
+        return found.Count == 0 ? null : string.Join(", ", found.Distinct());
+    }
+
+    private static readonly Regex InputTag = new(@"<input\b[^>]*>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // Tách giá trị của 1 ô nhập (input) trong HTML thô của 1 tab GLPI, tìm theo thuộc tính name (không phân biệt hoa/thường,
+    // không quan tâm thứ tự name/value trong thẻ). Dùng cho các trường không có trong REST API (vd "Delivery form").
+    public static string? ExtractInputValueByName(string html, string fieldName)
+    {
+        foreach (Match tag in InputTag.Matches(html))
+        {
+            var nameMatch = Regex.Match(tag.Value, """name=["']([^"']+)["']""", RegexOptions.IgnoreCase);
+            if (!nameMatch.Success || !string.Equals(nameMatch.Groups[1].Value, fieldName, StringComparison.OrdinalIgnoreCase)) continue;
+            var valueMatch = Regex.Match(tag.Value, """value=["']([^"']*)["']""", RegexOptions.IgnoreCase);
+            var value = valueMatch.Success ? System.Net.WebUtility.HtmlDecode(valueMatch.Groups[1].Value).Trim() : null;
+            return string.IsNullOrWhiteSpace(value) ? null : value;
+        }
+        return null;
+    }
+
     // Hệ điều hành -> đúng tên lựa chọn trong form phiếu (Win 11/10 Professional); loại khác giữ tên gốc của GLPI.
     public static string? Windows(JsonElement? body)
     {
@@ -196,41 +233,29 @@ public static class GlpiParsers
         return names[0];
     }
 
-    private static readonly string[] PhoneNumberKeys = ["caller_num", "callernum", "phonenumber", "phone_number", "msisdn", "number"];
-    private static readonly Regex PhoneNumberShape = new(@"^\+?[\d\s.\-()]{8,20}$", RegexOptions.Compiled);
+    private static readonly string[] MsisdnKeys = ["msin", "mobile_subscriber_identification_number", "msisdn", "phone_number", "phonenumber", "number"];
 
-    // SIM của điện thoại: số điện thoại (thường nằm ở "line" gắn với SIM) và serial ICCID (chuỗi số dài ở "serial"/"iccid").
-    // Chỉ nhận chuỗi đúng dạng số điện thoại để không điền nhầm mã khác vào ô Mobile phone number.
-    public static (string? PhoneNumber, string? Serial) Sim(JsonElement? body)
+    // GLPI không có sẵn liên kết SIM ↔ điện thoại qua API đáng tin cậy giữa các bản; nên khớp qua NGƯỜI ĐANG DÙNG:
+    // 1 SIM và 1 điện thoại cùng gán cho đúng 1 người thì coi SIM đó là của máy đó. Người có từ 2 SIM hoặc 2 điện thoại
+    // trở lên thì không đủ để khớp chắc chắn cái nào với cái nào — bỏ qua để tránh gán sai người dùng khác.
+    public static Dictionary<int, GlpiPhoneDetails> MatchPhonesByUser(IReadOnlyList<GlpiAsset> phones, IReadOnlyList<GlpiAsset> simcards)
     {
-        string? phone = null, serial = null;
-        foreach (var item in Items(body))
-        {
-            WalkSim(item, "", ref phone, ref serial);
-            if (phone is not null && serial is not null) break;
-        }
-        return (phone, serial);
-    }
+        var simsByUser = simcards
+            .Where(s => !string.IsNullOrWhiteSpace(s.User?.Name))
+            .GroupBy(s => s.User!.Name!.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
 
-    private static void WalkSim(JsonElement element, string key, ref string? phone, ref string? serial)
-    {
-        switch (element.ValueKind)
+        var result = new Dictionary<int, GlpiPhoneDetails>();
+        foreach (var phone in phones)
         {
-            case JsonValueKind.Object:
-                foreach (var property in element.EnumerateObject()) WalkSim(property.Value, property.Name, ref phone, ref serial);
-                break;
-            case JsonValueKind.Array:
-                foreach (var item in element.EnumerateArray()) WalkSim(item, key, ref phone, ref serial);
-                break;
-            case JsonValueKind.String:
-            case JsonValueKind.Number:
-                var text = (element.ValueKind == JsonValueKind.String ? element.GetString() : element.GetRawText())?.Trim();
-                if (string.IsNullOrEmpty(text)) break;
-                var lower = key.ToLowerInvariant();
-                if (serial is null && (lower is "serial" or "iccid") && Regex.IsMatch(text, @"^\d{15,22}$")) serial = text;
-                else if (phone is null && PhoneNumberKeys.Contains(lower) && PhoneNumberShape.IsMatch(text) && !Regex.IsMatch(text, @"^\d{15,}$")) phone = text;
-                break;
+            var userName = phone.User?.Name?.Trim();
+            if (string.IsNullOrWhiteSpace(userName)) continue;
+            if (!simsByUser.TryGetValue(userName, out var sims) || sims.Count != 1) continue;
+            var sim = sims[0];
+            var phoneNumber = MsisdnKeys.Select(sim.ExtraString).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+            result[phone.Id] = new GlpiPhoneDetails(Clean(phoneNumber), Clean(sim.Serial));
         }
+        return result;
     }
 
     // Mọi chuỗi ở khoá "name" trong cây JSON (phần mềm thường lồng: softwareversion -> software -> name).
