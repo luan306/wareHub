@@ -690,6 +690,9 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
   .print-page-24 .preview-value { width: 26.8mm; }
   .print-page-24 td.preview-qr-cell { height: auto; padding: 0; }
   .print-page-24 .preview-qr-cell .print-qr { display: block; width: 12.8mm !important; height: 12.8mm !important; margin: 0 auto; }
+  /* Tem 12mm (điện thoại): thiếu khung .print-page-12 thì .print-page không có kích thước cố định, có thể lệch
+     nhẹ so với khổ trang 30x12mm khai báo ở @page và bị tràn thêm 1 trang trắng mỗi tem — giới hạn cứng như tem-24. */
+  .print-page-12 { width: 30mm; height: 11.8mm; overflow: hidden; justify-content: center; }
   /* Máy in chỉ in đen trắng: bỏ nền chuyển sắc gần-trắng và viền xanh đen (sẽ bị biến thành chấm li ti), dùng trắng/đen thuần. */
   .print-page .tem { background: #fff; border-color: #000; box-shadow: none; }
   .print-page .device-label-table, .print-page .device-label-table td { border-color: #000; background: #fff; }
