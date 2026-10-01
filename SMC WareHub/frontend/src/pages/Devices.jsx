@@ -97,6 +97,10 @@ export function Devices() {
   const [loaiFilter, setLoaiFilter] = useState('');
   const [sort, setSort] = useState({ by: null, dir: 'asc' });
   const [selected, setSelected] = useState(new Set());
+  // Dữ liệu đầy đủ của từng thiết bị đã chọn (id -> device), lưu riêng ngoài `devices` (trang/kết quả tìm kiếm
+  // hiện tại) để khi gõ tìm kiếm/đổi trang làm `devices` đổi khác đi, danh sách đã chọn để in vẫn còn đủ nội dung
+  // thay vì biến mất do lọc theo `devices` hiện tại không còn chứa các thiết bị đã chọn trước đó nữa.
+  const [selectedDevices, setSelectedDevices] = useState(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -187,8 +191,15 @@ export function Devices() {
     setSort((current) => (current.by === key ? { by: key, dir: current.dir === 'asc' ? 'desc' : 'asc' } : { by: key, dir: 'asc' }));
   }
 
-  function toggleSelect(id) {
+  function toggleSelect(device) {
+    const id = device.id;
+    const wasSelected = selected.has(id);
     setSelected((prev) => toggleInSet(prev, id));
+    setSelectedDevices((prev) => {
+      const next = new Map(prev);
+      if (wasSelected) next.delete(id); else next.set(id, device);
+      return next;
+    });
   }
 
   function toggleSelectAll() {
@@ -198,12 +209,17 @@ export function Devices() {
       devices.forEach((d) => (allOnPageSelected ? next.delete(d.id) : next.add(d.id)));
       return next;
     });
+    setSelectedDevices((prev) => {
+      const next = new Map(prev);
+      devices.forEach((d) => (allOnPageSelected ? next.delete(d.id) : next.set(d.id, d)));
+      return next;
+    });
   }
 
   function handleAddToQueue() {
-    const chosen = devices.filter((d) => selected.has(d.id));
-    addDevices(chosen);
+    addDevices(Array.from(selectedDevices.values()));
     setSelected(new Set());
+    setSelectedDevices(new Map());
   }
 
   function openPrintListModal() {
@@ -231,6 +247,11 @@ export function Devices() {
       printListSelection.forEach((id) => next.delete(id));
       return next;
     });
+    setSelectedDevices((previous) => {
+      const next = new Map(previous);
+      printListSelection.forEach((id) => next.delete(id));
+      return next;
+    });
     setPrintListSelection(new Set());
   }
 
@@ -247,12 +268,17 @@ export function Devices() {
       printListSelection.forEach((id) => next.delete(id));
       return next;
     });
+    setSelectedDevices((previous) => {
+      const next = new Map(previous);
+      printListSelection.forEach((id) => next.delete(id));
+      return next;
+    });
     setPrintListSelection(new Set());
     setLabelReviewOpen(true);
   }
 
   function reviewPrintList() {
-    const incoming = devices.filter((device) => printListSelection.has(device.id));
+    const incoming = Array.from(printListSelection).map((id) => selectedDevices.get(id)).filter(Boolean);
 
     // Mã QR chứa Serial Number (Mã thiết bị): thiết bị không có serial thì không tạo được QR, phải báo cho người dùng biết.
     const noSerial = incoming.filter((device) => !device.ma?.trim());
@@ -408,7 +434,7 @@ export function Devices() {
   }, []);
 
   async function createBulkHandovers() {
-    const chosen = devices.filter((d) => selected.has(d.id));
+    const chosen = Array.from(selectedDevices.values());
     if (chosen.length === 0) return;
     if (chosen.length > MAX_PRINT_BATCH) {
       setError(t('dev.bulkTooMany', { max: MAX_PRINT_BATCH, count: chosen.length }));
@@ -431,6 +457,7 @@ export function Devices() {
         created.push({ ...payload, no: result.no });
       }
       setSelected(new Set());
+      setSelectedDevices(new Map());
       flushSync(() => setBulkHandoverItems(created));
       printHandoverSheets(() => setBulkHandoverItems(null));
     } catch (err) {
@@ -584,7 +611,7 @@ export function Devices() {
           {devices.map((d) => (
             <tr key={d.id}>
               <td>
-                <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleSelect(d.id)} />
+                <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleSelect(d)} />
               </td>
               <td className="action-col">
                 <div className="row-actions">
@@ -643,7 +670,7 @@ export function Devices() {
                       </tr>
                     </thead>
                     <tbody>
-                      {devices.filter((device) => selected.has(device.id)).map((device) => (
+                      {Array.from(selectedDevices.values()).map((device) => (
                         <tr key={device.id}>
                           <td><input type="checkbox" checked={printListSelection.has(device.id)} onChange={() => togglePrintListItem(device.id)} /></td>
                           <td className="mono">{device.ma}</td><td>{device.model || 'N/A'}</td><td>{t(`loai.${device.loai}`)}</td><td>{device.ten}</td><td>{device.user_name || 'N/A'}</td>
