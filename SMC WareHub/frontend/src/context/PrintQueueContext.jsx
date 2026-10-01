@@ -1,9 +1,24 @@
-import { createContext, useContext, useState, useCallback, useMemo } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo, useEffect } from 'react';
 
 const PrintQueueContext = createContext(null);
+const STORAGE_KEY = 'warehub-print-queue';
+
+function loadQueue() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    return Array.isArray(saved) ? saved : [];
+  } catch {
+    return [];
+  }
+}
 
 export function PrintQueueProvider({ children }) {
-  const [queue, setQueue] = useState([]); // mảng device object
+  // Lưu vào localStorage (không chỉ giữ trong state) để F5/đóng trình duyệt không làm mất hàng đợi đang gom dở.
+  const [queue, setQueue] = useState(loadQueue);
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(queue)); } catch { /* bỏ qua, vd. storage đầy */ }
+  }, [queue]);
 
   const addDevices = useCallback((devices) => {
     setQueue((prev) => {
