@@ -307,12 +307,12 @@ devices.MapPut("/{id:int}", async (int id, DeviceRequest request, HttpContext co
     var validation = ValidateDevice(request); if (validation is not null) return Results.BadRequest(new { error = validation });
     var existing = await db.Devices.SingleOrDefaultAsync(x => x.Id == id);
     if (existing is null) return Results.NotFound(new { error = "Không tìm thấy thiết bị" });
-    if (existing.Ma != request.Ma!.Trim() && await db.Devices.AnyAsync(x => x.Ma == request.Ma!.Trim())) return Results.Conflict(new { error = $"Mã thiết bị \"{request.Ma}\" đã tồn tại" });
+    if (existing.Ma != request.Ma!.Trim() && await db.Devices.AnyAsync(x => x.Id != id && x.Ma == request.Ma!.Trim())) return Results.Conflict(new { error = $"Mã thiết bị \"{request.Ma}\" đã tồn tại" });
     var before = SnapshotDevice(existing);
     CopyDevice(existing, request);
     var after = SnapshotDevice(existing);
     var currentUser = (User)context.Items["CurrentUser"]!;
-    RecordDeviceChanges(db, id, currentUser.Id, DiffDevice(before, after));
+    RecordDeviceChanges(db, id, currentUser.Id, currentUser.FullName, DiffDevice(before, after));
     await db.SaveChangesAsync();
     return Results.Ok(new { ok = true });
 }).RequireAuthorization("admin");
@@ -321,12 +321,12 @@ devices.MapGet("/history", async (string? search, string? from, string? to, int?
     var (currentPage, limit) = ParsePaging(page, pageSize, defaultSize: 30);
     search = ClampText(search, 100);
     var query = db.DeviceHistory.AsNoTracking().AsQueryable();
-    if (!string.IsNullOrWhiteSpace(search)) query = query.Where(x => x.Device.Ma.Contains(search) || x.Device.Ten.Contains(search) || x.User.FullName.Contains(search));
+    if (!string.IsNullOrWhiteSpace(search)) query = query.Where(x => x.Device.Ma.Contains(search) || x.Device.Ten.Contains(search) || x.ChangedByName.Contains(search));
     if (DateTime.TryParse(from, out var fromDate)) query = query.Where(x => x.ChangedAt >= fromDate.Date);
     if (DateTime.TryParse(to, out var toDate)) query = query.Where(x => x.ChangedAt < toDate.Date.AddDays(1));
     var total = await query.CountAsync();
     var rows = await query.OrderByDescending(x => x.ChangedAt).Skip((currentPage - 1) * limit).Take(limit)
-        .Select(x => new { x.Id, changed_at = x.ChangedAt, x.Device.Ma, x.Device.Ten, field_name = x.FieldName, old_value = x.OldValue, new_value = x.NewValue, changed_by = x.User.FullName })
+        .Select(x => new { x.Id, changed_at = x.ChangedAt, x.Device.Ma, x.Device.Ten, field_name = x.FieldName, old_value = x.OldValue, new_value = x.NewValue, changed_by = x.ChangedByName })
         .ToListAsync();
     return Results.Ok(new { history = rows, total, page = currentPage, pageSize = limit });
 }).RequireAuthorization("admin");
@@ -337,19 +337,6 @@ devices.MapGet("/glpi-probe", (int id, HttpContext context, GlpiClient glpi) => 
 devices.MapGet("/glpi-probe-simcards", (GlpiClient glpi, CancellationToken ct) => GlpiProbeAsync(glpi, () => glpi.ProbeSimcardsAsync(ct))).RequireAuthorization("admin");
 // Liệt kê đường dẫn thật trong tài liệu API của GLPI chứa từ khoá (vd ?q=software) — dùng khi các đường dẫn tự đoán đều sai.
 devices.MapGet("/glpi-probe-paths", (string? q, GlpiClient glpi, CancellationToken ct) => GlpiProbeAsync(glpi, () => glpi.ProbeSpecPathsAsync(q, ct))).RequireAuthorization("admin");
-// Thử lấy IP bằng cách đăng nhập giao diện web GLPI rồi đọc tab Network ports (API REST không có) — xem GlpiWebScrape.cs.
-// Trả về IP đọc được + đoạn HTML thô đầu tiên để đối chiếu bằng mắt xem tách đúng chưa.
-devices.MapGet("/glpi-probe-ip", (int id, GlpiClient glpi, CancellationToken ct) => GlpiProbeAsync(glpi, async () =>
-{
-    var (html, ip) = await glpi.FetchNetworkPortTabAsync(id, ct);
-    return new { ip, html_length = html.Length, html_preview = html.Length > 3000 ? html[..3000] + "…" : html };
-})).RequireAuthorization("admin");
-// Thử lấy "Delivery form" bằng cách đọc tab Infocom (thông tin quản lý/tài chính) — cũng không có trong REST API.
-devices.MapGet("/glpi-probe-delivery", (int id, GlpiClient glpi, CancellationToken ct) => GlpiProbeAsync(glpi, async () =>
-{
-    var (html, deliveryForm) = await glpi.FetchInfocomTabAsync(id, ct);
-    return new { delivery_form = deliveryForm, html_length = html.Length, html_preview = html.Length > 3000 ? html[..3000] + "…" : html };
-})).RequireAuthorization("admin");
 // Đồng bộ chạy nền (xem GlpiSyncJob): POST chỉ bắt đầu và trả lời ngay; GET /glpi-sync/status cho tiến độ và kết quả.
 devices.MapPost("/glpi-sync", (HttpContext context, GlpiClient glpi, GlpiSyncJob job, IServiceScopeFactory scopes, IHostApplicationLifetime lifetime) =>
 {
@@ -391,8 +378,11 @@ users.MapGet("/ldap-search", async (string? q, LdapService ldap, WareHubDbContex
     List<LdapUserMatch> matches;
     try { matches = await ldap.SearchUsersAsync(query, ct); }
     catch (Exception ex) when (ex is LdapException or InvalidOperationException) { return Results.BadRequest(new { error = $"Không kết nối được LDAP: {ex.Message}" }); }
-    // Lọc bớt những tài khoản đã có sẵn trong WareHub (local lẫn đã gắn LDAP từ trước) — tránh thêm trùng.
-    var existing = (await db.Users.Select(x => x.Username).ToListAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    // Lọc bớt những tài khoản đã có sẵn trong WareHub (local lẫn đã gắn LDAP từ trước) — tránh thêm trùng. Chỉ hỏi DB về
+    // đúng những username AD vừa trả (tối đa LdapService.MaxResults), không tải cả bảng users (có thể rất lớn) về so khớp.
+    var candidateUsernames = matches.Select(m => m.Username).ToList();
+    var existing = candidateUsernames.Count == 0 ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        : (await db.Users.Where(x => candidateUsernames.Contains(x.Username)).Select(x => x.Username).ToListAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
     return Results.Ok(new
     {
         results = matches.Where(m => !existing.Contains(m.Username)).Select(m => new { username = m.Username, full_name = m.FullName, email = m.Email }),
@@ -404,6 +394,10 @@ users.MapPost("/ldap-add", async (LdapAddRequest request, HttpContext context, W
 {
     var username = request.Username?.Trim(); var fullName = request.FullName?.Trim();
     if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(fullName)) return Results.BadRequest(new { error = "Thiếu tên đăng nhập hoặc họ tên" });
+    // AD có thể trả sAMAccountName/displayName dài hơn giới hạn cột ở đây — kiểm tra trước khi lưu, không để tới lúc
+    // SaveChangesAsync mới vỡ (MySQL "Data too long") thành lỗi 500 thô như UserCreateRequest bên dưới đã làm.
+    if (username.Length > 50) return Results.BadRequest(new { error = "Tên đăng nhập không được vượt quá 50 ký tự" });
+    if (fullName.Length > 100) return Results.BadRequest(new { error = "Họ tên không được vượt quá 100 ký tự" });
     if (request.Role is not ("admin" or "staff" or "superadmin")) return Results.BadRequest(new { error = "Vai trò không hợp lệ" });
     if (request.Role == "superadmin" && ((User)context.Items["CurrentUser"]!).Role != "superadmin") return Results.Forbid();
     if (await db.Users.AnyAsync(x => x.Username == username)) return Results.Conflict(new { error = $"Tên đăng nhập \"{username}\" đã tồn tại" });
@@ -443,7 +437,13 @@ users.MapPut("/{id:int}", async (int id, UserUpdateRequest request, HttpContext 
     if (targetIsOrBecomesSuperadmin && currentUser.Role != "superadmin"
         && (request.Role is not null || request.IsActive.HasValue || !string.IsNullOrWhiteSpace(request.Password)))
         return Results.Forbid();
-    if (request.FullName is not null) { if (string.IsNullOrWhiteSpace(request.FullName)) return Results.BadRequest(new { error = "Họ tên không được để trống" }); user.FullName = request.FullName.Trim(); }
+    if (request.FullName is not null)
+    {
+        var trimmedFullName = request.FullName.Trim();
+        if (trimmedFullName.Length == 0) return Results.BadRequest(new { error = "Họ tên không được để trống" });
+        if (trimmedFullName.Length > 100) return Results.BadRequest(new { error = "Họ tên không được vượt quá 100 ký tự" });
+        user.FullName = trimmedFullName;
+    }
     if (request.Role is not null)
     {
         if (request.Role is not ("admin" or "staff" or "superadmin")) return Results.BadRequest(new { error = "Vai trò không hợp lệ" });
@@ -464,16 +464,22 @@ users.MapPut("/{id:int}", async (int id, UserUpdateRequest request, HttpContext 
 users.MapDelete("/{id:int}", async (int id, HttpContext context, WareHubDbContext db) =>
 {
     var current = (User)context.Items["CurrentUser"]!; if (current.Id == id) return Results.BadRequest(new { error = "Không thể tự xoá chính mình" });
-    var user = await db.Users.FindAsync(id); if (user is null) return Results.NotFound(new { error = "Không tìm thấy người dùng" }); db.Users.Remove(user); await db.SaveChangesAsync(); userCache.Invalidate(id); AuditUserAction(app.Logger, context, "xoá", user.Username, ""); return Results.Ok(new { ok = true });
+    var user = await db.Users.FindAsync(id); if (user is null) return Results.NotFound(new { error = "Không tìm thấy người dùng" });
+    // Lịch sử in tem/sửa thiết bị/phiếu bàn giao đã lưu sẵn TÊN người thực hiện (PrintedByName/ChangedByName/CreatedByName)
+    // ngay lúc tạo — không còn phụ thuộc bản ghi User còn tồn tại hay không, nên xoá thẳng không bị chặn mà lịch sử vẫn giữ
+    // nguyên "ai đã làm gì" (chỉ mất liên kết id, không mất tên).
+    db.Users.Remove(user);
+    await db.SaveChangesAsync();
+    userCache.Invalidate(id); AuditUserAction(app.Logger, context, "xoá", user.Username, ""); return Results.Ok(new { ok = true });
 });
 
 var print = app.MapGroup("/api/print").RequireAuthorization();
 print.MapPost("/", async (PrintRequest request, HttpContext context, WareHubDbContext db) =>
 {
     if (request.DeviceIds is null || request.DeviceIds.Length == 0 || request.DeviceIds.Length > 500 || request.DeviceIds.Any(x => x < 1)) return Results.BadRequest(new { error = "Danh sách thiết bị không hợp lệ" });
-    var ids = request.DeviceIds.Distinct().ToArray(); var devicesFound = await db.Devices.Where(x => ids.Contains(x.Id)).ToListAsync();
+    var ids = request.DeviceIds.Distinct().ToArray(); var devicesFound = await db.Devices.AsNoTracking().Where(x => ids.Contains(x.Id)).ToListAsync();
     if (devicesFound.Count != ids.Length) return Results.Conflict(new { error = "Danh sách có thiết bị không tồn tại. Không có thiết bị nào được ghi lịch sử." });
-    var user = (User)context.Items["CurrentUser"]!; db.PrintHistory.AddRange(devicesFound.Select(x => new PrintHistory { DeviceId = x.Id, UserId = user.Id })); await db.SaveChangesAsync();
+    var user = (User)context.Items["CurrentUser"]!; db.PrintHistory.AddRange(devicesFound.Select(x => new PrintHistory { DeviceId = x.Id, UserId = user.Id, PrintedByName = user.FullName })); await db.SaveChangesAsync();
     var deviceRows = devicesFound.Select(x => new { x.Id, x.Ma, x.Ten, x.Loai, x.Kho, x.Model, x.Cpu, x.Ram, x.Storage, x.IsActive, x.LifecycleStatus, x.UserName, x.RegisteredAt, x.PhongBan, x.GhiChu, x.Producer, x.IpAddress }).ToList();
     return Results.Ok(new { devices = deviceRows });
 });
@@ -483,8 +489,8 @@ print.MapGet("/history", async (string? from, string? to, string? search, int? p
     search = ClampText(search, 100); var query = db.PrintHistory.AsNoTracking().AsQueryable();
     if (DateTime.TryParse(from, out var fromDate)) query = query.Where(x => x.PrintedAt >= fromDate.Date);
     if (DateTime.TryParse(to, out var toDate)) query = query.Where(x => x.PrintedAt < toDate.Date.AddDays(1));
-    if (!string.IsNullOrWhiteSpace(search)) query = query.Where(x => x.Device.Ma.Contains(search) || x.Device.Ten.Contains(search) || x.User.FullName.Contains(search));
-    var total = await query.CountAsync(); var rows = await query.OrderByDescending(x => x.PrintedAt).Skip((currentPage - 1) * limit).Take(limit).Select(x => new { x.Id, printed_at = x.PrintedAt, x.Device.Ma, x.Device.Ten, x.Device.Loai, x.Device.Kho, printed_by = x.User.FullName }).ToListAsync(); return Results.Ok(new { history = rows, total, page = currentPage, pageSize = limit });
+    if (!string.IsNullOrWhiteSpace(search)) query = query.Where(x => x.Device.Ma.Contains(search) || x.Device.Ten.Contains(search) || x.PrintedByName.Contains(search));
+    var total = await query.CountAsync(); var rows = await query.OrderByDescending(x => x.PrintedAt).Skip((currentPage - 1) * limit).Take(limit).Select(x => new { x.Id, printed_at = x.PrintedAt, x.Device.Ma, x.Device.Ten, x.Device.Loai, x.Device.Kho, printed_by = x.PrintedByName }).ToListAsync(); return Results.Ok(new { history = rows, total, page = currentPage, pageSize = limit });
 });
 
 var handovers = app.MapGroup("/api/handovers").RequireAuthorization();
@@ -504,7 +510,7 @@ handovers.MapPost("/", async (HandoverRequest request, HttpContext context, Ware
     var customNo = Truncate(request.No, 12);
     if (!string.IsNullOrWhiteSpace(customNo))
     {
-        db.Handovers.Add(new Handover { No = customNo, DeviceId = device?.Id, DeviceMa = device?.Ma, FullName = Truncate(request.FullName, 100), Payload = HandoverPayload(request.Data), UserId = user.Id });
+        db.Handovers.Add(new Handover { No = customNo, DeviceId = device?.Id, DeviceMa = device?.Ma, FullName = Truncate(request.FullName, 100), Payload = HandoverPayload(request.Data), UserId = user.Id, CreatedByName = user.FullName });
         try { await db.SaveChangesAsync(); return Results.Ok(new { no = customNo }); }
         catch (DbUpdateException) { return Results.Conflict(new { error = $"Số phiếu \"{customNo}\" đã tồn tại" }); }
     }
@@ -512,7 +518,7 @@ handovers.MapPost("/", async (HandoverRequest request, HttpContext context, Ware
     for (var attempt = 0; attempt < 5; attempt++)
     {
         var no = await NextHandoverNoAsync(db, day);
-        db.Handovers.Add(new Handover { No = no, DeviceId = device?.Id, DeviceMa = device?.Ma, FullName = Truncate(request.FullName, 100), Payload = HandoverPayload(request.Data), UserId = user.Id });
+        db.Handovers.Add(new Handover { No = no, DeviceId = device?.Id, DeviceMa = device?.Ma, FullName = Truncate(request.FullName, 100), Payload = HandoverPayload(request.Data), UserId = user.Id, CreatedByName = user.FullName });
         try { await db.SaveChangesAsync(); return Results.Ok(new { no }); }
         catch (DbUpdateException) { db.ChangeTracker.Clear(); }
     }
@@ -526,7 +532,7 @@ handovers.MapPut("/{no}", async (string no, HandoverUpdateRequest request, WareH
     var newNo = Truncate(request.No, 12);
     if (!string.IsNullOrWhiteSpace(newNo) && newNo != handover.No)
     {
-        if (await db.Handovers.AnyAsync(x => x.No == newNo)) return Results.Conflict(new { error = $"Số phiếu \"{newNo}\" đã tồn tại" });
+        if (await db.Handovers.AnyAsync(x => x.Id != handover.Id && x.No == newNo)) return Results.Conflict(new { error = $"Số phiếu \"{newNo}\" đã tồn tại" });
         handover.No = newNo;
     }
     handover.FullName = Truncate(request.FullName, 100);
@@ -568,12 +574,16 @@ handovers.MapGet("/", async (string? search, int? page, int? pageSize, WareHubDb
     var (currentPage, limit) = ParsePaging(page, pageSize, defaultSize: 30);
     var total = await query.CountAsync();
     var rows = await query.OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id).Skip((currentPage - 1) * limit).Take(limit).ToListAsync();
-    var userIds = rows.Select(x => x.UserId).Distinct().ToList();
-    var userNames = await db.Users.AsNoTracking().Where(x => userIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.FullName);
+    // Phiếu tạo trước khi có cột created_by_name (đã backfill lúc nâng cấp schema) rơi vào trường hợp hiếm còn thiếu —
+    // chỉ khi đó mới tra thêm bảng Users làm phương án dự phòng.
+    var missingNameUserIds = rows.Where(x => string.IsNullOrEmpty(x.CreatedByName)).Select(x => x.UserId).Distinct().ToList();
+    var userNames = missingNameUserIds.Count > 0
+        ? await db.Users.AsNoTracking().Where(x => missingNameUserIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.FullName)
+        : [];
     var items = rows.Select(x => new
     {
         x.Id, x.No, x.DeviceId, x.DeviceMa, x.FullName, x.CreatedAt,
-        PrintedBy = userNames.GetValueOrDefault(x.UserId),
+        PrintedBy = string.IsNullOrEmpty(x.CreatedByName) ? userNames.GetValueOrDefault(x.UserId) : x.CreatedByName,
         Data = x.Payload is null ? (JsonElement?)null : JsonSerializer.Deserialize<JsonElement>(x.Payload),
     });
     return Results.Ok(new { handovers = items, total, page = currentPage, pageSize = limit, totalPages = TotalPages(total, limit) });
@@ -679,6 +689,9 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
     await using var scope = scopes.CreateAsyncScope();
     var db = scope.ServiceProvider.GetRequiredService<WareHubDbContext>();
     var glpi = scope.ServiceProvider.GetRequiredService<GlpiClient>();
+    // Lưu kèm TÊN người chạy đồng bộ vào mỗi dòng lịch sử thay đổi thiết bị (DeviceHistory.ChangedByName) — không
+    // còn phụ thuộc join sang bảng Users, nên xoá tài khoản sau này không ảnh hưởng gì tới lịch sử đã ghi.
+    var actorName = await db.Users.AsNoTracking().Where(x => x.Id == userId).Select(x => x.FullName).SingleOrDefaultAsync(ct) ?? "?";
     job.Report("lists");
 
     // 4 danh sách hỏi song song. Máy tính là bắt buộc; điện thoại/tablet/màn hình lỗi (vd. sai đường dẫn) chỉ báo riêng loại đó,
@@ -711,34 +724,8 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
     {
         try { details = await glpi.GetDetailsForComputersAsync(computers.Where(c => !string.IsNullOrWhiteSpace(c.Serial)).Select(c => c.Id), detailReport, (done, total) => job.Report("computers", done, total), ct); }
         catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException) { detailReport.Warn("all", $"Không lấy được chi tiết máy tính: {ex.Message}"); }
-
-        // REST API không có đường dẫn IP cho bản GLPI này (đã xác nhận 404) — lấy bằng cách đọc tab "Network ports"
-        // trên giao diện web (xem GlpiWebScrape.cs). Gắn vào bản ghi details sẵn có, không ghi đè CPU/RAM/ổ cứng đã lấy.
-        if (glpi.ScrapeIpEnabled)
-        {
-            job.Report("computers-ip");
-            try
-            {
-                var ips = await glpi.FetchIpForComputersAsync(details.Keys, detailReport, ct);
-                foreach (var (glpiId, ip) in ips)
-                {
-                    if (string.IsNullOrWhiteSpace(ip)) continue;
-                    details[glpiId] = details.TryGetValue(glpiId, out var existing) ? existing with { Ip = ip } : new GlpiComputerDetails(null, null, null, ip, null, null);
-                }
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException) { detailReport.Warn("ip-web", $"Không lấy được IP (scrape web): {ex.Message}"); }
-        }
     }
 
-    // "Delivery form" (số phiếu bàn giao cũ trước khi có WareHub) cũng KHÔNG có trong REST API (đã xác nhận trên
-    // GLPI thật) — chỉ đọc được qua tab "Infocom" trên giao diện web, giống cách lấy IP ở trên.
-    var deliveryForms = new Dictionary<int, string?>();
-    if (glpi.DetailsEnabled && glpi.ScrapeDeliveryFormEnabled && computers.Count > 0)
-    {
-        job.Report("computers-deliveryform");
-        try { deliveryForms = await glpi.FetchDeliveryFormForComputersAsync(computers.Where(c => !string.IsNullOrWhiteSpace(c.Serial)).Select(c => c.Id), detailReport, ct); }
-        catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException) { detailReport.Warn("deliveryform-web", $"Không lấy được Delivery form (scrape web): {ex.Message}"); }
-    }
     if (glpi.DetailsEnabled && phones.Count > 0)
     {
         job.Report("phones");
@@ -772,9 +759,6 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
     var seenSerials = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     int created = 0, updated = 0, unchanged = 0, skipped = 0, duplicates = 0;
     var skippedNames = new List<string>(); // tối đa 20 tên tài sản GLPI thiếu serial, để người dùng biết cần bổ sung ở đâu
-    // Trường "Delivery form" của máy tính trong GLPI: công ty dùng số này làm số phiếu bàn giao trước khi có WareHub (dạng
-    // giống Handover.No, vd "2601048"). Gom lại, tạo phiếu liên kết sau khi đã lưu thiết bị (để có Id thật cho máy mới).
-    var pendingLegacyHandovers = new List<(Device Device, string No)>();
 
     foreach (var (c, loai, kho) in assets)
     {
@@ -792,7 +776,6 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
             : existingBySerial.TryGetValue(serial, out var bySerial) && bySerial.GlpiId is null ? bySerial
             : null;
 
-        Device device;
         if (existing is not null)
         {
             // Serial mới trùng với serial hiện tại của 1 thiết bị KHÁC trong hệ thống: không ghi đè chồng lên nhau
@@ -811,9 +794,8 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
             ApplyGlpiAsset(existing, c);
             if (ApplyExtras(existing, loai, c.Id)) detailed++;
             var changes = DiffDevice(before, SnapshotDevice(existing));
-            RecordDeviceChanges(db, existing.Id, userId, changes);
+            RecordDeviceChanges(db, existing.Id, userId, actorName, changes);
             if (changes.Count > 0) updated++; else unchanged++;
-            device = existing;
         }
         else
         {
@@ -822,30 +804,13 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
             if (ApplyExtras(newDevice, loai, c.Id)) detailed++;
             db.Devices.Add(newDevice);
             created++;
-            device = newDevice;
         }
-        if (loai == "laptop" && deliveryForms.TryGetValue(c.Id, out var rawDeliveryNo) && Truncate(rawDeliveryNo, 12) is { Length: > 0 } deliveryNo)
-            pendingLegacyHandovers.Add((device, deliveryNo));
     }
 
     job.Report("saving");
     await db.SaveChangesAsync(CancellationToken.None);
 
-    // Chỉ tạo phiếu khi số đó CHƯA tồn tại — không bao giờ ghi đè phiếu đã có (kể cả phiếu người dùng tự tạo trùng số).
-    int legacyHandoversCreated = 0, legacyHandoversSkipped = 0;
-    if (pendingLegacyHandovers.Count > 0)
-    {
-        var existingNos = (await db.Handovers.Select(h => h.No).ToListAsync(CancellationToken.None)).ToHashSet();
-        foreach (var (device, no) in pendingLegacyHandovers)
-        {
-            if (!existingNos.Add(no)) { legacyHandoversSkipped++; continue; }
-            db.Handovers.Add(new Handover { No = no, DeviceId = device.Id, DeviceMa = device.Ma, FullName = Truncate(device.UserName, 100), UserId = userId });
-            legacyHandoversCreated++;
-        }
-        if (legacyHandoversCreated > 0) await db.SaveChangesAsync(CancellationToken.None);
-    }
-
-    job.Complete(new { ok = true, total = assets.Count, computers = computers.Count, phones = phones.Count, phone_error = phoneError, tablets = tablets.Count, tablet_error = tabletError, monitors = monitors.Count, monitor_error = monitorError, created, updated, unchanged, skipped, skipped_names = skippedNames, duplicates, detailed, detail_warnings = detailReport.Warnings, legacy_handovers_created = legacyHandoversCreated, legacy_handovers_skipped = legacyHandoversSkipped });
+    job.Complete(new { ok = true, total = assets.Count, computers = computers.Count, phones = phones.Count, phone_error = phoneError, tablets = tablets.Count, tablet_error = tabletError, monitors = monitors.Count, monitor_error = monitorError, created, updated, unchanged, skipped, skipped_names = skippedNames, duplicates, detailed, detail_warnings = detailReport.Warnings });
 }
 static IResult GlpiNotConfigured() => Results.BadRequest(new { error = "Chưa cấu hình kết nối GLPI. Thêm mục \"Glpi\" (BaseUrl, ClientId, ClientSecret, Username, Password) vào appsettings.Development.json." });
 // Chạy 1 lần kiểm tra GLPI cho admin: báo chưa cấu hình / lỗi kết nối bằng thông báo rõ ràng thay vì lỗi 500.
@@ -893,8 +858,8 @@ static void ApplyDetails(Device device, GlpiComputerDetails details)
 static List<(string Field, string? OldValue, string? NewValue)> DiffDevice(Dictionary<string, string?> before, Dictionary<string, string?> after) =>
     before.Where(entry => entry.Value != after[entry.Key]).Select(entry => (entry.Key, entry.Value, after[entry.Key])).ToList();
 // Ghi lại từng trường thiết bị đã đổi (không làm gì nếu không có thay đổi); người gọi tự SaveChanges.
-static void RecordDeviceChanges(WareHubDbContext db, int deviceId, int userId, List<(string Field, string? OldValue, string? NewValue)> changes) =>
-    db.DeviceHistory.AddRange(changes.Select(c => new DeviceHistory { DeviceId = deviceId, UserId = userId, FieldName = c.Field, OldValue = ClipHistory(c.OldValue), NewValue = ClipHistory(c.NewValue) }));
+static void RecordDeviceChanges(WareHubDbContext db, int deviceId, int userId, string actorName, List<(string Field, string? OldValue, string? NewValue)> changes) =>
+    db.DeviceHistory.AddRange(changes.Select(c => new DeviceHistory { DeviceId = deviceId, UserId = userId, ChangedByName = actorName, FieldName = c.Field, OldValue = ClipHistory(c.OldValue), NewValue = ClipHistory(c.NewValue) }));
 // Cột lịch sử chỉ chứa 255 ký tự trong khi ghi chú dài tới 500: cắt bớt để lưu lịch sử không làm hỏng cả lần lưu/đồng bộ.
 static string? ClipHistory(string? value) => value is { Length: > 255 } ? value[..255] : value;
 // Phân trang dùng chung: trang tối thiểu 1, số dòng mỗi trang trong khoảng 1..100.
@@ -990,6 +955,7 @@ static async Task EnsureSchemaAsync(WareHubDbContext db)
     await EnsureIndexAsync(db, "print_history", "IX_print_history_PrintedAt", "`printed_at`");
     await EnsureDeviceHistoryTableAsync(db);
     await EnsureHandoverTableAsync(db);
+    await EnsureHistoryActorNameColumnsAsync(db);
     await EnsureIndexAsync(db, "handovers", "IX_handovers_CreatedAt", "`created_at`");
     // Chỉ mục thừa/không còn dùng — idx_devices_loai và idx_devices_phong_ban trùng cột với IX_devices_Loai/IX_devices_PhongBan ở trên (tạo ra ngoài code trước đây);
     // IX_devices_IsActive vô dụng từ khi mọi thiết bị luôn is_active = true (không còn giá trị nào khác để lọc). Giữ lại chỉ khiến mỗi lần ghi thiết bị chậm hơn, không giúp gì cho truy vấn.
@@ -1058,6 +1024,20 @@ static async Task EnsureIndexDroppedAsync(WareHubDbContext db, string table, str
     if (await IndexExistsAsync(db, table, indexName))
         await db.Database.ExecuteSqlRawAsync($"DROP INDEX `{indexName}` ON `{table}`");
 }
+// Tên khoá ngoại không cố định (có thể do EF EnsureCreated đặt tự động, hoặc do CREATE TABLE tay đặt tên khác) — dò theo
+// cột tham chiếu trong information_schema rồi xoá đúng tên tìm được, không đoán trước 1 tên cụ thể. Khác với
+// EnsureIndexAsync/EnsureIndexDroppedAsync ở trên (chuỗi nội suy luôn là literal cố định tại nơi gọi), "name" ở đây đọc
+// từ CSDL lúc chạy — không phải input người dùng, nhưng vẫn kiểm tra đúng dạng tên định danh MySQL trước khi nội suy,
+// không dựa vào suy luận "chắc an toàn" như lý do miễn cảnh báo EF1002 phía trên.
+#pragma warning disable EF1002
+static async Task DropForeignKeysOnColumnAsync(WareHubDbContext db, string table, string column)
+{
+    var names = await db.Database.SqlQueryRaw<string>(
+        "SELECT CONSTRAINT_NAME AS `Value` FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = {0} AND COLUMN_NAME = {1} AND REFERENCED_TABLE_NAME IS NOT NULL",
+        table, column).ToListAsync();
+    foreach (var name in names.Where(n => System.Text.RegularExpressions.Regex.IsMatch(n, "^[A-Za-z0-9_]+$")))
+        await db.Database.ExecuteSqlRawAsync($"ALTER TABLE `{table}` DROP FOREIGN KEY `{name}`");
+}
 #pragma warning restore EF1002
 static async Task EnsureHandoverTableAsync(WareHubDbContext db)
 {
@@ -1070,6 +1050,7 @@ static async Task EnsureHandoverTableAsync(WareHubDbContext db)
             full_name VARCHAR(100) NULL,
             payload LONGTEXT NULL,
             user_id INT NOT NULL,
+            created_by_name VARCHAR(100) NULL,
             created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             UNIQUE INDEX IX_handovers_no (`no`)
         )
@@ -1080,19 +1061,44 @@ static async Task EnsureHandoverTableAsync(WareHubDbContext db)
 static async Task EnsureDeviceHistoryTableAsync(WareHubDbContext db)
 {
     if (await TableExistsAsync(db, "device_history")) return;
+    // Không có khoá ngoại tới users (xem EnsureHistoryActorNameColumnsAsync) — tên người sửa chụp sẵn vào changed_by_name.
     await db.Database.ExecuteSqlRawAsync("""
         CREATE TABLE device_history (
             Id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
             device_id INT NOT NULL,
             user_id INT NOT NULL,
+            changed_by_name VARCHAR(100) NOT NULL DEFAULT '',
             field_name VARCHAR(30) NOT NULL,
             old_value VARCHAR(255) NULL,
             new_value VARCHAR(255) NULL,
-            changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            changed_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             INDEX IX_device_history_ChangedAt (changed_at),
             INDEX IX_device_history_DeviceId (device_id),
-            CONSTRAINT FK_device_history_devices FOREIGN KEY (device_id) REFERENCES devices (Id) ON DELETE CASCADE,
-            CONSTRAINT FK_device_history_users FOREIGN KEY (user_id) REFERENCES users (Id) ON DELETE RESTRICT
+            CONSTRAINT FK_device_history_devices FOREIGN KEY (device_id) REFERENCES devices (Id) ON DELETE CASCADE
         )
         """);
+}
+// Tài khoản bị xoá không còn bị chặn bởi lịch sử in tem/sửa thiết bị (trước đây dùng khoá ngoại Restrict trên user_id) —
+// bỏ khoá ngoại đó (nếu DB cũ còn) và thêm cột *_by_name chụp sẵn tên người thực hiện ngay lúc ghi, không cần bảng users
+// còn tồn tại để hiển thị lịch sử. Chạy lại vô hại (mọi bước đều tự kiểm tra trước khi đổi).
+static async Task EnsureHistoryActorNameColumnsAsync(WareHubDbContext db)
+{
+    await DropForeignKeysOnColumnAsync(db, "print_history", "user_id");
+    await DropForeignKeysOnColumnAsync(db, "device_history", "user_id");
+
+    if (!await ColumnExistsAsync(db, "print_history", "printed_by_name"))
+    {
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE print_history ADD COLUMN printed_by_name VARCHAR(100) NOT NULL DEFAULT ''");
+        await db.Database.ExecuteSqlRawAsync("UPDATE print_history h JOIN users u ON u.Id = h.user_id SET h.printed_by_name = u.full_name WHERE h.printed_by_name = ''");
+    }
+    if (!await ColumnExistsAsync(db, "device_history", "changed_by_name"))
+    {
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE device_history ADD COLUMN changed_by_name VARCHAR(100) NOT NULL DEFAULT ''");
+        await db.Database.ExecuteSqlRawAsync("UPDATE device_history h JOIN users u ON u.Id = h.user_id SET h.changed_by_name = u.full_name WHERE h.changed_by_name = ''");
+    }
+    if (!await ColumnExistsAsync(db, "handovers", "created_by_name"))
+    {
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE handovers ADD COLUMN created_by_name VARCHAR(100) NULL");
+        await db.Database.ExecuteSqlRawAsync("UPDATE handovers h JOIN users u ON u.Id = h.user_id SET h.created_by_name = u.full_name WHERE h.created_by_name IS NULL");
+    }
 }

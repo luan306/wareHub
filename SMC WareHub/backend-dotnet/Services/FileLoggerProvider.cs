@@ -5,11 +5,20 @@ namespace WareHub.Api.Services;
 /// Cửa sổ console/Debug Console chỉ giữ được vài trăm dòng gần nhất và mất hết khi đóng cửa sổ; file thì xem lại được
 /// bất cứ lúc nào, kể cả sau khi tắt ứng dụng — không cần copy tay từ màn hình nữa.
 /// </summary>
-public sealed class FileLoggerProvider(string directory) : ILoggerProvider
+public sealed class FileLoggerProvider : ILoggerProvider
 {
+    private readonly string _directory;
     private readonly object _writeLock = new();
 
-    public ILogger CreateLogger(string categoryName) => new FileLogger(categoryName, directory, _writeLock);
+    public FileLoggerProvider(string directory)
+    {
+        _directory = directory;
+        // Tạo thư mục đúng 1 lần ở đây — tạo trong Log() (chạy cho MỖI dòng log) tốn 1 lượt gọi hệ thống mỗi lần ghi,
+        // dù thư mục chắc chắn đã có sẵn từ dòng log trước đó. Lỗi ở đây (ổ đĩa đầy, quyền...) không được chặn khởi động.
+        try { Directory.CreateDirectory(_directory); } catch { /* bỏ qua, mỗi lần ghi vẫn tự thử lại nếu cần */ }
+    }
+
+    public ILogger CreateLogger(string categoryName) => new FileLogger(categoryName, _directory, _writeLock);
     public void Dispose() { }
 
     private sealed class FileLogger(string category, string directory, object writeLock) : ILogger
@@ -28,10 +37,14 @@ public sealed class FileLoggerProvider(string directory) : ILoggerProvider
                 // Lỗi khi ghi log (ví dụ ổ đĩa đầy, thư mục bị khoá) không được làm hỏng chính ứng dụng.
                 try
                 {
-                    Directory.CreateDirectory(directory);
                     File.AppendAllText(Path.Combine(directory, $"app-{DateTime.Now:yyyy-MM-dd}.log"), line + Environment.NewLine);
                 }
-                catch { /* bỏ qua */ }
+                catch
+                {
+                    // Thư mục có thể đã bị xoá sau khi khởi động — thử tạo lại 1 lần rồi ghi lại, không âm thầm mất log mãi.
+                    try { Directory.CreateDirectory(directory); File.AppendAllText(Path.Combine(directory, $"app-{DateTime.Now:yyyy-MM-dd}.log"), line + Environment.NewLine); }
+                    catch { /* bỏ qua */ }
+                }
             }
         }
     }

@@ -83,5 +83,22 @@ public sealed class LoginGuard
         foreach (var (key, entry) in _entries)
             lock (entry)
                 if (entry.LockedUntil <= now && now - entry.WindowStart > Window) _entries.TryRemove(key, out _);
+
+        // Kẻ tấn công đổi liên tục sang (ip, username) CHƯA từng gặp trong vòng 15 phút thì không entry nào ở trên đủ
+        // "cũ" để bị xoá (WindowStart luôn mới) — vòng lặp trên không chặn được phình bộ nhớ trong trường hợp này, và
+        // mỗi lần gọi Prune() lại quét toàn bộ (ngày càng chậm) mà không dọn được gì. Vượt mốc an toàn thì xoá cứng bớt
+        // (bỏ qua window), ưu tiên giữ lại entry đang khoá (quan trọng hơn cho việc chặn dò mật khẩu), xoá dư xuống còn
+        // 75% mốc để không phải Prune lại ngay ở lần RecordFailure kế tiếp.
+        if (_entries.Count > MaxEntries)
+        {
+            var toTrim = _entries.Count - MaxEntries * 3 / 4;
+            foreach (var (key, entry) in _entries)
+            {
+                if (toTrim <= 0) break;
+                bool locked;
+                lock (entry) locked = entry.LockedUntil > now;
+                if (!locked && _entries.TryRemove(key, out _)) toTrim--;
+            }
+        }
     }
 }

@@ -42,12 +42,14 @@ public sealed partial class GlpiClient
     // Đường dẫn đã xác nhận dùng được cho mỗi nguồn (key) trong lần đồng bộ này — gọi thẳng, không thử lại các candidate khác.
     private readonly ConcurrentDictionary<string, string> _confirmedEndpoint = new();
     private string? _specUrl;
+    // Nhiều nơi độc lập cùng cần dò tài liệu API (Tablet/Simcard/software) — nhớ lại kết quả 1 lần cho cả đời GlpiClient
+    // này (1 lần đồng bộ hoặc 1 lần probe), tránh tải lại + phân tích lại cùng 1 file doc.json nhiều lần không cần thiết.
+    private List<string>? _specPathsCache;
+    private readonly SemaphoreSlim _specPathsLock = new(1, 1);
     private readonly ConcurrentDictionary<string, int> _sourceFailures = new();
     private readonly ConcurrentDictionary<string, int> _sourceSuccesses = new();
 
     public bool DetailsEnabled => _options.SyncDetails;
-    public bool ScrapeIpEnabled => _options.ScrapeIpFromWeb;
-    public bool ScrapeDeliveryFormEnabled => _options.ScrapeDeliveryFormFromWeb;
 
     private string VersionPrefix()
     {
@@ -110,7 +112,7 @@ public sealed partial class GlpiClient
             }
             _endpointCandidates = map;
             // Cấu hình có thể vừa được admin sửa lại — thử lại từ đầu thay vì cứ dùng mãi đường dẫn đã xác nhận trước đó.
-            if (refresh) _confirmedEndpoint.Clear();
+            if (refresh) { _confirmedEndpoint.Clear(); _specPathsCache = null; }
         }
         finally
         {
@@ -121,30 +123,44 @@ public sealed partial class GlpiClient
     private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     // Tài liệu OpenAPI của GLPI (đường dẫn thay đổi theo phiên bản nên thử vài chỗ). Không tải được thì trả về danh sách rỗng.
+    // Nhớ lại kết quả (xem _specPathsCache) — GetTabletsAsync, GetSimcardsAsync và vòng dò "software" ở trên đều gọi
+    // hàm này độc lập; không nhớ lại thì 1 lần đồng bộ có thể tải + phân tích lại cùng 1 file doc.json tới 3 lần.
     private async Task<List<string>> LoadSpecPathsAsync(string prefix, CancellationToken ct)
     {
-        var token = await GetAccessTokenAsync(ct);
-        foreach (var candidate in new[] { $"{prefix}/doc.json", "/doc.json", $"{prefix}/doc" })
+        if (_specPathsCache is not null) return _specPathsCache;
+        await _specPathsLock.WaitAsync(ct);
+        try
         {
-            try
+            if (_specPathsCache is not null) return _specPathsCache;
+            var token = await GetAccessTokenAsync(ct);
+            foreach (var candidate in new[] { $"{prefix}/doc.json", "/doc.json", $"{prefix}/doc" })
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, $"{_options.BaseUrl}{candidate}");
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-                using var response = await http.SendAsync(request, ct);
-                if (!response.IsSuccessStatusCode || response.Content.Headers.ContentType?.MediaType?.Contains("json") != true) continue;
-                using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
-                if (!doc.RootElement.TryGetProperty("paths", out var paths) || paths.ValueKind != JsonValueKind.Object) continue;
-                _specUrl = $"{_options.BaseUrl}{candidate}";
-                return paths.EnumerateObject().Where(p => p.Value.ValueKind == JsonValueKind.Object && p.Value.TryGetProperty("get", out _)).Select(p => p.Name).ToList();
+                try
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Get, $"{_options.BaseUrl}{candidate}");
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                    request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                    using var response = await http.SendAsync(request, ct);
+                    if (!response.IsSuccessStatusCode || response.Content.Headers.ContentType?.MediaType?.Contains("json") != true) continue;
+                    using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+                    if (!doc.RootElement.TryGetProperty("paths", out var paths) || paths.ValueKind != JsonValueKind.Object) continue;
+                    _specUrl = $"{_options.BaseUrl}{candidate}";
+                    _specPathsCache = paths.EnumerateObject().Where(p => p.Value.ValueKind == JsonValueKind.Object && p.Value.TryGetProperty("get", out _)).Select(p => p.Name).ToList();
+                    return _specPathsCache;
+                }
+                catch (Exception exception) when (exception is HttpRequestException or JsonException or TaskCanceledException)
+                {
+                    logger.LogDebug(exception, "Không đọc được tài liệu API GLPI tại {Candidate}", candidate);
+                }
             }
-            catch (Exception exception) when (exception is HttpRequestException or JsonException or TaskCanceledException)
-            {
-                logger.LogDebug(exception, "Không đọc được tài liệu API GLPI tại {Candidate}", candidate);
-            }
+            logger.LogWarning("Không tải được tài liệu API của GLPI để dò đường dẫn chi tiết; dùng đường dẫn mặc định.");
+            _specPathsCache = [];
+            return _specPathsCache;
         }
-        logger.LogWarning("Không tải được tài liệu API của GLPI để dò đường dẫn chi tiết; dùng đường dẫn mặc định.");
-        return [];
+        finally
+        {
+            _specPathsLock.Release();
+        }
     }
 
     private static readonly Regex IdPlaceholder = new(@"\{[^}]+\}", RegexOptions.Compiled);
@@ -182,6 +198,9 @@ public sealed partial class GlpiClient
     {
         if (_confirmedEndpoint.TryGetValue(key, out var confirmed))
         {
+            // Đường dẫn đã xác nhận dùng được nhưng GLPI bắt đầu lỗi liên tục giữa lần đồng bộ (vd GLPI khởi động lại) —
+            // sau vài lần lỗi thì ngưng gọi tiếp cho các máy còn lại, không gọi hoài 1 đường dẫn chắc chắn vẫn đang lỗi.
+            if (_sourceFailures.GetValueOrDefault(key) >= FailuresBeforeSkip) return (null, 0, confirmed);
             var (body, status, url) = await FetchOneAsync(confirmed, glpiId, ct);
             if (body is null) { _sourceFailures.AddOrUpdate(key, 1, (_, n) => n + 1); report?.Warn(key, $"GLPI trả HTTP {status} ở {confirmed} — bỏ qua nguồn này. Kiểm tra/đặt lại đường dẫn trong cấu hình Glpi."); }
             return (body, status, url);

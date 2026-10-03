@@ -165,43 +165,6 @@ public static class GlpiParsers
         }
     }
 
-    private static readonly Regex IPv4Anywhere = new(@"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b", RegexOptions.Compiled);
-
-    // Tách IP từ HTML thô của tab "Network ports" (GlpiClient.FetchNetworkPortTabAsync — trang web GLPI, không phải JSON của
-    // REST API). Không có cấu trúc rõ ràng như JSON nên chỉ dò mọi chuỗi trông giống IPv4 trong trang, loại bỏ loopback/mặt
-    // nạ mạng/broadcast và những chỗ có nhãn "netmask"/"gateway"/"subnet" đứng ngay trước đó (đoán theo ngữ cảnh xung quanh).
-    public static string? ExtractIpFromHtml(string html)
-    {
-        var found = new List<string>();
-        foreach (Match match in IPv4Anywhere.Matches(html))
-        {
-            var text = match.Value;
-            if (text.StartsWith("127.") || text.StartsWith("169.254.") || text.StartsWith("255.") || text == "0.0.0.0") continue;
-            var contextStart = Math.Max(0, match.Index - 80);
-            var context = html[contextStart..match.Index].ToLowerInvariant();
-            if (NotAnAddressKeys.Any(context.Contains)) continue;
-            found.Add(text);
-        }
-        return found.Count == 0 ? null : string.Join(", ", found.Distinct());
-    }
-
-    private static readonly Regex InputTag = new(@"<input\b[^>]*>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    // Tách giá trị của 1 ô nhập (input) trong HTML thô của 1 tab GLPI, tìm theo thuộc tính name (không phân biệt hoa/thường,
-    // không quan tâm thứ tự name/value trong thẻ). Dùng cho các trường không có trong REST API (vd "Delivery form").
-    public static string? ExtractInputValueByName(string html, string fieldName)
-    {
-        foreach (Match tag in InputTag.Matches(html))
-        {
-            var nameMatch = Regex.Match(tag.Value, """name=["']([^"']+)["']""", RegexOptions.IgnoreCase);
-            if (!nameMatch.Success || !string.Equals(nameMatch.Groups[1].Value, fieldName, StringComparison.OrdinalIgnoreCase)) continue;
-            var valueMatch = Regex.Match(tag.Value, """value=["']([^"']*)["']""", RegexOptions.IgnoreCase);
-            var value = valueMatch.Success ? System.Net.WebUtility.HtmlDecode(valueMatch.Groups[1].Value).Trim() : null;
-            return string.IsNullOrWhiteSpace(value) ? null : value;
-        }
-        return null;
-    }
-
     // Hệ điều hành -> đúng tên lựa chọn trong form phiếu (Win 11/10 Professional); loại khác giữ tên gốc của GLPI.
     public static string? Windows(JsonElement? body)
     {

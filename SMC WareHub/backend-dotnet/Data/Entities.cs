@@ -15,7 +15,6 @@ public sealed class User
     [Column("auth_source")] public string AuthSource { get; set; } = "local";
     [Column("is_active")] public bool IsActive { get; set; } = true;
     [Column("created_at")] public DateTime CreatedAt { get; set; }
-    public ICollection<PrintHistory> PrintHistory { get; set; } = new List<PrintHistory>();
 }
 
 [Table("devices")]
@@ -60,10 +59,12 @@ public sealed class PrintHistory
 {
     public int Id { get; set; }
     [Column("device_id")] public int DeviceId { get; set; }
+    // Không còn khoá ngoại tới users (xoá tài khoản không được chặn bởi lịch sử in tem) — chỉ giữ id để tham khảo.
     [Column("user_id")] public int UserId { get; set; }
+    /// <summary>Tên người in, chụp lại ngay lúc in — giữ nguyên dù tài khoản đó sau này bị xoá.</summary>
+    [Column("printed_by_name")] public string PrintedByName { get; set; } = "";
     [Column("printed_at")] public DateTime PrintedAt { get; set; }
     public Device Device { get; set; } = null!;
-    public User User { get; set; } = null!;
 }
 
 [Table("device_history")]
@@ -71,13 +72,15 @@ public sealed class DeviceHistory
 {
     public int Id { get; set; }
     [Column("device_id")] public int DeviceId { get; set; }
+    // Không còn khoá ngoại tới users (xoá tài khoản không được chặn bởi lịch sử sửa thiết bị) — chỉ giữ id để tham khảo.
     [Column("user_id")] public int UserId { get; set; }
+    /// <summary>Tên người sửa, chụp lại ngay lúc sửa — giữ nguyên dù tài khoản đó sau này bị xoá.</summary>
+    [Column("changed_by_name")] public string ChangedByName { get; set; } = "";
     [Column("field_name")] public string FieldName { get; set; } = "";
     [Column("old_value")] public string? OldValue { get; set; }
     [Column("new_value")] public string? NewValue { get; set; }
     [Column("changed_at")] public DateTime ChangedAt { get; set; }
     public Device Device { get; set; } = null!;
-    public User User { get; set; } = null!;
 }
 
 [Table("handovers")]
@@ -90,5 +93,7 @@ public sealed class Handover
     [Column("full_name")] public string? FullName { get; set; }
     [Column("payload")] public string? Payload { get; set; }
     [Column("user_id")] public int UserId { get; set; }
+    /// <summary>Tên người tạo phiếu, chụp lại ngay lúc tạo — giữ nguyên dù tài khoản đó sau này bị xoá.</summary>
+    [Column("created_by_name")] public string? CreatedByName { get; set; }
     [Column("created_at")] public DateTime CreatedAt { get; set; }
 }

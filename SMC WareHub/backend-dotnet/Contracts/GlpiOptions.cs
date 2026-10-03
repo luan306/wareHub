@@ -56,20 +56,6 @@ public sealed class GlpiOptions
     /// <summary>Số máy được hỏi chi tiết cùng lúc. Tăng cho nhanh hơn, giảm nếu GLPI phản hồi chậm/lỗi.</summary>
     public int DetailConcurrency { get; set; } = 6;
 
-    /// <summary>
-    /// Lấy IP bằng cách đọc tab "Network ports" trên giao diện WEB GLPI (REST API không có đường dẫn nào trả về IP
-    /// cho bản GLPI công ty đang dùng — đã xác nhận 404 ở mọi tên gọi thử qua). Cách này không thuộc API chính thức
-    /// nên phụ thuộc giao diện GLPI hiện tại; đặt false nếu GLPI nâng cấp/đổi giao diện làm cách đọc này sai theo.
-    /// </summary>
-    public bool ScrapeIpFromWeb { get; set; } = true;
-
-    /// <summary>
-    /// Lấy số "Delivery form" (dùng làm số phiếu bàn giao cũ trước khi có WareHub) bằng cách đọc tab "Infocom" trên
-    /// giao diện WEB GLPI — trường này cũng KHÔNG có trong API REST (đã xác nhận trên GLPI thật, không phải mock).
-    /// Cùng cơ chế/rủi ro như ScrapeIpFromWeb; tắt riêng được nếu chỉ muốn tắt phần này.
-    /// </summary>
-    public bool ScrapeDeliveryFormFromWeb { get; set; } = true;
-
     public bool IsConfigured => !string.IsNullOrWhiteSpace(BaseUrl) && !string.IsNullOrWhiteSpace(ClientId)
         && !string.IsNullOrWhiteSpace(Username) && !string.IsNullOrWhiteSpace(Password);
 }

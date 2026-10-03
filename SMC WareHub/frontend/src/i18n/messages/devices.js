@@ -6,8 +6,6 @@ export const devices = {
   'dev.syncGlpi': ['Đồng bộ từ GLPI', 'Sync from GLPI'],
   'dev.syncPhase.lists': ['Đang lấy danh sách...', 'Fetching lists...'],
   'dev.syncPhase.computers': ['Cấu hình máy tính', 'Computer details'],
-  'dev.syncPhase.computers-ip': ['Địa chỉ IP', 'IP addresses'],
-  'dev.syncPhase.computers-deliveryform': ['Số Delivery form', 'Delivery form numbers'],
   'dev.syncPhase.phones': ['SIM điện thoại', 'Phone SIMs'],
   'dev.syncPhase.saving': ['Đang lưu...', 'Saving...'],
   'dev.syncing': ['Đang đồng bộ...', 'Syncing...'],

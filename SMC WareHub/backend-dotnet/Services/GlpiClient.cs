@@ -22,8 +22,6 @@ public sealed class GlpiAsset
     public GlpiRef? Model { get; set; }
     public GlpiRef? Type { get; set; }
     public GlpiRef? Location { get; set; }
-    // "Delivery form" KHÔNG nằm trong API REST (đã xác nhận trên GLPI thật) — lấy qua scrape web (Infocom tab,
-    // xem GlpiWebScrape.cs), không phải field JSON như các trường khác ở đây.
     // Mọi trường JSON không khớp property nào ở trên (vd SIM có "msin" — Mobile Subscriber Identification Number — không
     // có sẵn chỗ chứa riêng): giữ lại thô để đọc thử theo nhiều tên trường khác nhau bằng ExtraString, không cần biết
     // trước chính xác GLPI đặt tên gì.
@@ -164,8 +162,10 @@ public sealed partial class GlpiClient(HttpClient http, IOptions<GlpiOptions> op
         List<string> errors = [];
         foreach (var candidate in candidates)
         {
+            // Bắt cả lỗi mạng/JSON hỏng (không chỉ InvalidOperationException) — 1 candidate lỗi mạng tạm thời không được
+            // làm dừng hẳn việc thử các candidate còn lại, vẫn phải thử tới cùng như khi candidate đó trả 404.
             try { return await GetAssetsAsync(candidate, "SIM", ct); }
-            catch (InvalidOperationException ex) { errors.Add($"{candidate}: {ex.Message}"); }
+            catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException or JsonException or TaskCanceledException) { errors.Add($"{candidate}: {ex.Message}"); }
         }
         throw new InvalidOperationException($"Không tìm được danh sách SIM trong GLPI (đã thử: {string.Join(" | ", candidates)}). Đặt Glpi:SimcardListEndpoint cho đúng.");
     }
