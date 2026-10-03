@@ -115,7 +115,7 @@ export function Layout() {
             <div className="avatar">{user?.full_name?.charAt(0)?.toUpperCase() || 'U'}</div>
             <div className="user-details">
               <b>{user?.full_name}</b>
-              <span>{user?.role === 'admin' ? t('role.admin') : t('role.staff')}</span>
+              <span>{t(user?.role === 'superadmin' ? 'role.superadmin' : user?.role === 'admin' ? 'role.admin' : 'role.staff')}</span>
             </div>
             <button onClick={logout} title={t('layout.logout')}>↗</button>
           </div>

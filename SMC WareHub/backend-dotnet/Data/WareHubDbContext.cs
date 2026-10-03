@@ -19,6 +19,7 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
             entity.HasIndex(x => x.Username).IsUnique();
             entity.Property(x => x.FullName).HasMaxLength(100).IsRequired();
             entity.Property(x => x.Role).HasConversion<string>().HasMaxLength(10);
+            entity.Property(x => x.AuthSource).HasMaxLength(10).HasDefaultValue("local");
             entity.Property(x => x.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP(6)").ValueGeneratedOnAdd();
         });
         modelBuilder.Entity<Device>(entity =>
@@ -40,6 +41,8 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
             entity.Property(x => x.GhiChu).HasMaxLength(500);
             entity.Property(x => x.Producer).HasMaxLength(100);
             entity.Property(x => x.IpAddress).HasMaxLength(45);
+            entity.Property(x => x.GlpiType).HasMaxLength(20);
+            entity.HasIndex(x => new { x.GlpiType, x.GlpiId });
             entity.HasIndex(x => x.Loai);
             entity.HasIndex(x => x.LifecycleStatus);
             entity.HasIndex(x => x.PhongBan);

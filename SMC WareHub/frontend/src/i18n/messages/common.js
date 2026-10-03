@@ -6,6 +6,7 @@ export const common = {
 
   'common.close': ['Đóng', 'Close'],
   'common.cancel': ['Huỷ', 'Cancel'],
+  'common.back': ['Quay lại', 'Back'],
   'common.save': ['Lưu', 'Save'],
   'common.edit': ['Sửa', 'Edit'],
   'common.delete': ['Xoá', 'Delete'],
@@ -39,6 +40,7 @@ export const common = {
   'role.admin': ['Quản trị viên', 'Administrator'],
   'role.adminShort': ['Quản trị', 'Admin'],
   'role.staff': ['Nhân viên', 'Staff'],
+  'role.superadmin': ['Quản trị cấp cao', 'Super Admin'],
 
   'login.eyebrow': ['Trung tâm quản lý kho', 'Warehouse Control Center'],
   'login.titlePrefix': ['Đăng nhập vào ', 'Sign in to '],
@@ -84,6 +86,7 @@ export const common = {
   'field.phong_ban': ['Phòng ban', 'Dept'],
   'field.ghi_chu': ['Ghi chú', 'Comment'],
   'field.registered_at': ['Ngày đăng ký', 'Registered'],
+  'field.updated_at': ['Cập nhật lúc', 'Last updated'],
   'field.date': ['Ngày', 'Date'],
 
   'users.title': ['Quản lý người dùng', 'User management'],
@@ -102,6 +105,12 @@ export const common = {
   'users.password': ['Mật khẩu', 'Password'],
   'users.passwordRules': ['Tối thiểu 10 ký tự, có cả chữ và số, không chứa tên đăng nhập và không phải mật khẩu phổ biến.', 'At least 10 characters with letters and digits, not containing the username and not a common password.'],
   'users.confirmDelete': ['Xoá người dùng "{name}" ({username})?', 'Delete user "{name}" ({username})?'],
+  'users.addLdap': ['Thêm từ LDAP', 'Add from LDAP'],
+  'users.ldapSearchPlaceholder': ['Gõ tên hoặc tài khoản AD...', 'Type an AD name or username...'],
+  'users.ldapSearch': ['Tìm', 'Search'],
+  'users.ldapNoResults': ['Không tìm thấy tài khoản AD nào khớp (hoặc đã có sẵn trong WareHub).', 'No matching AD account found (or it already exists in WareHub).'],
+  'users.ldapPick': ['Chọn', 'Pick'],
+  'users.ldapPasswordNote': ['Tài khoản gắn LDAP — mật khẩu quản lý bên Active Directory, không đặt lại được ở đây.', 'LDAP-linked account — password is managed in Active Directory, cannot be reset here.'],
 
   'history.title': ['Lịch sử thay đổi thiết bị', 'Device change history'],
   'history.search': ['Tìm theo mã, tên thiết bị, người sửa...', 'Search by code, device name, editor...'],

@@ -11,6 +11,8 @@ public sealed class User
     [Column("password_hash")] public string PasswordHash { get; set; } = "";
     [Column("full_name")] public string FullName { get; set; } = "";
     public string Role { get; set; } = "staff";
+    /// <summary>"local" (mật khẩu tự quản ở đây) hoặc "ldap" (xác thực qua Active Directory, tạo qua "Thêm từ LDAP").</summary>
+    [Column("auth_source")] public string AuthSource { get; set; } = "local";
     [Column("is_active")] public bool IsActive { get; set; } = true;
     [Column("created_at")] public DateTime CreatedAt { get; set; }
     public ICollection<PrintHistory> PrintHistory { get; set; } = new List<PrintHistory>();
@@ -43,6 +45,11 @@ public sealed class Device
     [Column("phone_number")] public string? PhoneNumber { get; set; }
     /// <summary>Số serial (ICCID) của SIM.</summary>
     [Column("sim_serial")] public string? SimSerial { get; set; }
+    // Khoá liên kết ổn định tới tài sản GLPI (id trong GLPI + loại nguồn "laptop"/"phone"/"tablet"/"monitor"): đồng bộ
+    // khớp theo cặp này trước, chỉ dò theo số serial (Ma) cho thiết bị CHƯA từng gắn — để sửa seri bên GLPI (gõ nhầm,
+    // cập nhật lại) không bị hiểu nhầm thành tài sản mới rồi tạo trùng bản ghi.
+    [Column("glpi_id")] public int? GlpiId { get; set; }
+    [Column("glpi_type")] public string? GlpiType { get; set; }
     [Column("created_at")] public DateTime CreatedAt { get; set; }
     [Column("updated_at")] public DateTime UpdatedAt { get; set; }
     public ICollection<PrintHistory> PrintHistory { get; set; } = new List<PrintHistory>();

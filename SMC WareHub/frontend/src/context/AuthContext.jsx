@@ -24,7 +24,9 @@ export function AuthProvider({ children }) {
   }, []);
 
   // Ghi nhớ (useMemo): không tạo object mới mỗi lần render, tránh vẽ lại mọi nơi dùng useAuth() một cách vô ích.
-  const value = useMemo(() => ({ user, login, logout, isAdmin: user?.role === 'admin' }), [user, login, logout]);
+  const isSuperAdmin = user?.role === 'superadmin';
+  // superadmin kế thừa mọi quyền admin (giống claim JWT backend đã gắn thêm "admin" cho superadmin).
+  const value = useMemo(() => ({ user, login, logout, isAdmin: user?.role === 'admin' || isSuperAdmin, isSuperAdmin }), [user, login, logout, isSuperAdmin]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

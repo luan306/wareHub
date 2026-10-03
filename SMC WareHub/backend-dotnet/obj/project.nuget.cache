@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "hyMc2u5mLjc=",
+  "dgSpecHash": "TWZEzvKNE60=",
   "success": true,
   "projectFilePath": "D:\\SMC WareHub\\backend-dotnet\\WareHub.Api.csproj",
   "expectedPackageFiles": [
@@ -31,6 +31,7 @@
     "C:\\Users\\Admin\\.nuget\\packages\\mysqlconnector\\2.3.5\\mysqlconnector.2.3.5.nupkg.sha512",
     "C:\\Users\\Admin\\.nuget\\packages\\pomelo.entityframeworkcore.mysql\\8.0.2\\pomelo.entityframeworkcore.mysql.8.0.2.nupkg.sha512",
     "C:\\Users\\Admin\\.nuget\\packages\\qrcoder\\1.6.0\\qrcoder.1.6.0.nupkg.sha512",
+    "C:\\Users\\Admin\\.nuget\\packages\\system.directoryservices.protocols\\10.0.12\\system.directoryservices.protocols.10.0.12.nupkg.sha512",
     "C:\\Users\\Admin\\.nuget\\packages\\system.identitymodel.tokens.jwt\\7.1.2\\system.identitymodel.tokens.jwt.7.1.2.nupkg.sha512"
   ],
   "logs": []

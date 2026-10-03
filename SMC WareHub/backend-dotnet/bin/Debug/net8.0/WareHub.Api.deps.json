@@ -14,7 +14,8 @@
           "Microsoft.Extensions.Caching.Memory": "8.0.1",
           "Microsoft.Extensions.Identity.Core": "8.0.8",
           "Pomelo.EntityFrameworkCore.MySql": "8.0.2",
-          "QRCoder": "1.6.0"
+          "QRCoder": "1.6.0",
+          "System.DirectoryServices.Protocols": "10.0.12"
         },
         "runtime": {
           "WareHub.Api.dll": {}
@@ -271,6 +272,34 @@
           }
         }
       },
+      "System.DirectoryServices.Protocols/10.0.12": {
+        "runtime": {
+          "lib/net8.0/System.DirectoryServices.Protocols.dll": {
+            "assemblyVersion": "10.0.0.12",
+            "fileVersion": "10.0.1226.42308"
+          }
+        },
+        "runtimeTargets": {
+          "runtimes/linux/lib/net8.0/System.DirectoryServices.Protocols.dll": {
+            "rid": "linux",
+            "assetType": "runtime",
+            "assemblyVersion": "10.0.0.12",
+            "fileVersion": "10.0.1226.42308"
+          },
+          "runtimes/osx/lib/net8.0/System.DirectoryServices.Protocols.dll": {
+            "rid": "osx",
+            "assetType": "runtime",
+            "assemblyVersion": "10.0.0.12",
+            "fileVersion": "10.0.1226.42308"
+          },
+          "runtimes/win/lib/net8.0/System.DirectoryServices.Protocols.dll": {
+            "rid": "win",
+            "assetType": "runtime",
+            "assemblyVersion": "10.0.0.12",
+            "fileVersion": "10.0.1226.42308"
+          }
+        }
+      },
       "System.IdentityModel.Tokens.Jwt/7.1.2": {
         "dependencies": {
           "Microsoft.IdentityModel.JsonWebTokens": "7.1.2",
@@ -479,6 +508,13 @@
       "sha512": "sha512-XmPA81eo+oRxBuyVdswsSkTGTE1d3thfF11Z1PdD7oB56A6HU4G4AAOdySmGRMb/cljwlFTMWUtosGEnwpS6GA==",
       "path": "qrcoder/1.6.0",
       "hashPath": "qrcoder.1.6.0.nupkg.sha512"
+    },
+    "System.DirectoryServices.Protocols/10.0.12": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-L2PHm7ewfjQYgbhBUB+lXiewxoNo+rhn06geWeUJP3qYCDnkL+Qibv6TEPMlMsF/zab4cU2bE8BWTBqzHZYiYg==",
+      "path": "system.directoryservices.protocols/10.0.12",
+      "hashPath": "system.directoryservices.protocols.10.0.12.nupkg.sha512"
     },
     "System.IdentityModel.Tokens.Jwt/7.1.2": {
       "type": "package",

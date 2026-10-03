@@ -244,6 +244,12 @@ public static class GlpiParsers
             .Where(s => !string.IsNullOrWhiteSpace(s.User?.Name))
             .GroupBy(s => s.User!.Name!.Trim(), StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+        // Đếm số điện thoại theo người dùng: thiếu bước này thì người có 2+ điện thoại nhưng chỉ 1 SIM sẽ bị gán
+        // nhầm CÙNG 1 số điện thoại/serial SIM cho cả 2 máy (lặp qua từng điện thoại, không kiểm tra số lượng máy).
+        var phoneCountByUser = phones
+            .Where(p => !string.IsNullOrWhiteSpace(p.User?.Name))
+            .GroupBy(p => p.User!.Name!.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
 
         var result = new Dictionary<int, GlpiPhoneDetails>();
         foreach (var phone in phones)
@@ -251,6 +257,7 @@ public static class GlpiParsers
             var userName = phone.User?.Name?.Trim();
             if (string.IsNullOrWhiteSpace(userName)) continue;
             if (!simsByUser.TryGetValue(userName, out var sims) || sims.Count != 1) continue;
+            if (!phoneCountByUser.TryGetValue(userName, out var phoneCount) || phoneCount != 1) continue;
             var sim = sims[0];
             var phoneNumber = MsisdnKeys.Select(sim.ExtraString).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
             result[phone.Id] = new GlpiPhoneDetails(Clean(phoneNumber), Clean(sim.Serial));

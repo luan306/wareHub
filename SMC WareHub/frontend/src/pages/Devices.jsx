@@ -32,6 +32,7 @@ const COLUMN_DEFS = [
   { key: 'sim_serial', labelKey: 'field.sim_serial', defaultHidden: true, cell: (d) => d.sim_serial || '—' },
   { key: 'ghi_chu', labelKey: 'field.ghi_chu', cell: (d) => d.ghi_chu || '—' },
   { key: 'registered_at', labelKey: 'field.date', cell: (d) => (d.registered_at ? d.registered_at.slice(0, 10) : '—') },
+  { key: 'updated_at', labelKey: 'field.updated_at', cell: (d) => (d.updated_at ? new Date(d.updated_at).toLocaleString('vi-VN') : '—') },
 ];
 // Chữ trên nút khi đang đồng bộ: giai đoạn hiện tại và số máy đã xong.
 function syncProgressLabel(progress, t) {
@@ -385,7 +386,9 @@ export function Devices() {
     lines.push(t('dev.syncDetailed', { count: result.detailed ?? 0 }));
     (result.detail_warnings || []).forEach((w) => lines.push(`⚠ ${translateServerMessage(w)}`));
     alert(lines.join('\n'));
-    fetchDevices();
+    // Đưa thiết bị vừa đồng bộ (mới thêm/mới sửa) lên đầu danh sách để in cho tiện, thay vì phải tự tìm/sắp lại.
+    setSort({ by: 'updated_at', dir: 'desc' });
+    setPage(1);
   }
 
   // Đồng bộ chạy nền trên máy chủ: hỏi tiến độ định kỳ tới khi xong (bấm đồng bộ xong tải lại trang vẫn theo dõi tiếp được).

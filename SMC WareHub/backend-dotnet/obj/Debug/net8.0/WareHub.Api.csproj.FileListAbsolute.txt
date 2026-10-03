@@ -48,3 +48,7 @@ D:\SMC WareHub\backend-dotnet\bin\Debug\net8.0\appsettings.Development.example.j
 D:\SMC WareHub\backend-dotnet\bin\Debug\net8.0\Microsoft.Extensions.Caching.Memory.dll
 D:\SMC WareHub\backend-dotnet\bin\Debug\net8.0\Microsoft.Extensions.DependencyInjection.Abstractions.dll
 D:\SMC WareHub\backend-dotnet\bin\Debug\net8.0\Microsoft.Extensions.Logging.Abstractions.dll
+D:\SMC WareHub\backend-dotnet\bin\Debug\net8.0\System.DirectoryServices.Protocols.dll
+D:\SMC WareHub\backend-dotnet\bin\Debug\net8.0\runtimes\linux\lib\net8.0\System.DirectoryServices.Protocols.dll
+D:\SMC WareHub\backend-dotnet\bin\Debug\net8.0\runtimes\osx\lib\net8.0\System.DirectoryServices.Protocols.dll
+D:\SMC WareHub\backend-dotnet\bin\Debug\net8.0\runtimes\win\lib\net8.0\System.DirectoryServices.Protocols.dll
