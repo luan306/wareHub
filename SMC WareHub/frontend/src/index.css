@@ -400,6 +400,58 @@ a { color: var(--primary); }
 
 .modal-xl { width: min(1180px, calc(100vw - 32px)); }
 
+/* Khung "Thêm từ LDAP" — rộng hơn modal thường để liệt kê danh sách gợi ý thoải mái. */
+.ldap-modal { width: min(640px, calc(100vw - 32px)); }
+.ldap-search-bar { position: relative; margin-bottom: 16px; }
+.ldap-search-bar svg { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+.ldap-search-bar input {
+  width: 100%; padding: 11px 14px 11px 40px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--panel-soft); color: var(--ink); font-size: 13.5px; outline: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.ldap-search-bar input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.ldap-search-bar button {
+  position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
+  border: 0; background: var(--primary); color: #fff; padding: 7px 16px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 700; cursor: pointer;
+}
+.ldap-search-bar button:hover:not(:disabled) { background: var(--primary-dark); }
+.ldap-search-bar button:disabled { opacity: .6; cursor: default; }
+.ldap-hint { color: var(--muted); font-size: 11.5px; }
+.ldap-list-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 2px 0 8px; flex-wrap: wrap; }
+.ldap-list-head .ldap-select-all { display: inline-flex; align-items: center; gap: 7px; margin: 0; color: var(--ink-soft); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.ldap-select-all input { accent-color: var(--primary); width: 15px; height: 15px; }
+.ldap-results { display: grid; gap: 2px; max-height: 360px; overflow-y: auto; margin: -4px; padding: 4px; }
+/* .modal-card label{display:block} (độ ưu tiên 1 class+1 thẻ) thắng .ldap-result-row (1 class) nếu không ghép thêm
+   lớp cha ở đây — khiến các khối con (avatar, tên) xếp dọc thay vì nằm ngang. Ghép .ldap-results để độ ưu tiên cao hơn. */
+.ldap-results .ldap-result-row {
+  display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--radius-md);
+  margin: 0; transition: background 120ms ease; cursor: pointer;
+}
+.ldap-result-row input[type=checkbox] { accent-color: var(--primary); width: 16px; height: 16px; flex: none; }
+.ldap-result-row:hover { background: var(--primary-soft); }
+.ldap-result-avatar {
+  flex: 0 0 36px; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%;
+  background: linear-gradient(135deg, #0079c8, #00b4d8); color: #fff; font-weight: 700; font-size: 14px;
+}
+.ldap-result-info { min-width: 0; flex: 1; display: grid; gap: 1px; }
+.ldap-result-info b { font-size: 13.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ldap-result-info span { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ldap-bulk-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.ldap-bulk-footer .ldap-bulk-role { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--ink-soft); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.ldap-bulk-role select { min-width: 150px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-soft); color: var(--ink); font-size: 13px; }
+.ldap-bulk-footer .modal-actions { margin-top: 0; }
+.ldap-picked-card {
+  display: flex; align-items: center; gap: 14px; padding: 16px; border-radius: var(--radius-md);
+  background: var(--panel-soft); border: 1px solid var(--line); margin-bottom: 4px;
+}
+.ldap-picked-avatar {
+  flex: 0 0 44px; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%;
+  background: linear-gradient(135deg, #0079c8, #00b4d8); color: #fff; font-weight: 700; font-size: 17px;
+}
+.ldap-picked-info b { display: block; font-size: 15px; color: var(--ink); }
+.ldap-picked-info span { font-size: 12px; color: var(--muted); }
+
 .kho-conflict-modal { width: min(460px, 100%); text-align: center; }
 .kho-conflict-icon {
   width: 44px; height: 44px; margin: 0 auto 16px; display: grid; place-items: center;
@@ -774,7 +826,8 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
      bớt phần in được, tránh tràn thêm 1 trang gần như trắng. */
   body.printing-handover .handover-print-root .hv-sheet { zoom: 1; box-shadow: none; box-sizing: border-box; width: 210mm; height: 284mm; min-height: 0; padding: 8mm; margin: 0 auto; }
 }
-.hv-no-field input { background: var(--panel-soft); color: var(--ink-soft); font-weight: 700; letter-spacing: .5px; }
+/* Ô này giờ gõ tay được (trước chỉ hiện số tự cấp, readOnly) — bỏ màu nền/chữ kiểu "chỉ xem" để không gây hiểu lầm. */
+.hv-no-field input { font-weight: 700; letter-spacing: .5px; }
 .hv-hint { display: block; margin-top: 3px; color: var(--muted); font-size: 10.5px; line-height: 1.3; }
 .hv-error { margin-right: auto; color: var(--danger); font-size: 12.5px; }
 .hv-note { margin-right: auto; color: var(--ink-soft); font-size: 12px; }

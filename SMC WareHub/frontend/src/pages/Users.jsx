@@ -5,7 +5,6 @@ import { useReconnect } from '../context/ConnectionContext';
 import { useAuth } from '../context/AuthContext';
 
 const emptyForm = { id: null, username: '', password: '', full_name: '', role: 'staff', auth_source: 'local' };
-const emptyLdapAdd = { username: '', full_name: '', role: 'staff' };
 
 const roleLabelKey = { staff: 'role.staff', admin: 'role.adminShort', superadmin: 'role.superadmin' };
 
@@ -21,10 +20,11 @@ export function Users() {
   const [ldapModalOpen, setLdapModalOpen] = useState(false);
   const [ldapQuery, setLdapQuery] = useState('');
   const [ldapResults, setLdapResults] = useState(null);
+  const [ldapTruncated, setLdapTruncated] = useState(false); // AD còn nhiều hơn số đã lấy về, chưa liệt kê hết
   const [ldapSearching, setLdapSearching] = useState(false);
   const [ldapError, setLdapError] = useState('');
-  const [ldapPicked, setLdapPicked] = useState(null); // { username, full_name, email } vừa chọn, đang chờ xác nhận vai trò
-  const [ldapAddForm, setLdapAddForm] = useState(emptyLdapAdd);
+  const [ldapSelected, setLdapSelected] = useState(new Set()); // username đã tick chọn để thêm hàng loạt
+  const [ldapBulkRole, setLdapBulkRole] = useState('staff');
   const [ldapAdding, setLdapAdding] = useState(false);
 
   const fetchUsers = useCallback(async () => {
@@ -51,17 +51,15 @@ export function Users() {
     setModalOpen(true);
   }
 
-  function openLdapModal() {
-    setLdapQuery(''); setLdapResults(null); setLdapError(''); setLdapPicked(null); setLdapAddForm(emptyLdapAdd);
-    setLdapModalOpen(true);
-  }
-
-  async function handleLdapSearch(e) {
-    e.preventDefault();
+  async function runLdapSearch(query) {
     setLdapError(''); setLdapSearching(true); setLdapResults(null);
     try {
-      const data = await api.get('/users/ldap-search', { q: ldapQuery.trim() });
+      const data = await api.get('/users/ldap-search', { q: query });
       setLdapResults(data.results);
+      setLdapTruncated(!!data.truncated);
+      // Lọc lại theo đúng tập kết quả mới (tránh giữ tick của những dòng không còn trong danh sách sau khi tìm lại).
+      const names = new Set(data.results.map((r) => r.username));
+      setLdapSelected((prev) => new Set([...prev].filter((u) => names.has(u))));
     } catch (err) {
       setLdapError(err.message);
     } finally {
@@ -69,22 +67,48 @@ export function Users() {
     }
   }
 
-  function pickLdapResult(r) {
-    setLdapPicked(r);
-    setLdapAddForm({ username: r.username, full_name: r.full_name, role: 'staff' });
+  function openLdapModal() {
+    setLdapQuery(''); setLdapResults(null); setLdapError(''); setLdapSelected(new Set()); setLdapBulkRole('staff');
+    setLdapModalOpen(true);
+    // Mở khung là thấy ngay danh sách gợi ý (không bắt gõ tìm trước) — gõ tìm sau đó chỉ để lọc bớt lại.
+    runLdapSearch('');
   }
 
-  async function handleLdapAdd(e) {
+  function handleLdapSearch(e) {
     e.preventDefault();
+    runLdapSearch(ldapQuery.trim());
+  }
+
+  function toggleLdapSelect(username) {
+    setLdapSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(username)) next.delete(username); else next.add(username);
+      return next;
+    });
+  }
+
+  function toggleLdapSelectAll() {
+    const all = (ldapResults || []).every((r) => ldapSelected.has(r.username));
+    setLdapSelected(all ? new Set() : new Set((ldapResults || []).map((r) => r.username)));
+  }
+
+  async function handleLdapBulkAdd() {
+    if (ldapSelected.size === 0) return;
     setLdapError(''); setLdapAdding(true);
-    try {
-      await api.post('/users/ldap-add', ldapAddForm);
+    const chosen = (ldapResults || []).filter((r) => ldapSelected.has(r.username));
+    // Mỗi tài khoản thêm độc lập, không có thứ tự/số đếm nào cần giữ liền mạch (khác hẳn số phiếu bàn giao) — chạy
+    // song song cho nhanh thay vì đợi từng cái một, 1 người lỗi không chặn những người còn lại.
+    const outcomes = await Promise.allSettled(
+      chosen.map((r) => api.post('/users/ldap-add', { username: r.username, full_name: r.full_name, role: ldapBulkRole })),
+    );
+    const failed = outcomes.filter((o) => o.status === 'rejected').length;
+    setLdapAdding(false);
+    fetchUsers();
+    if (failed > 0) {
+      setLdapError(t('users.ldapBulkPartialFail', { failed, total: chosen.length }));
+      runLdapSearch(ldapQuery.trim()); // làm mới danh sách: ai thêm thành công thì biến mất, ai lỗi vẫn còn để thử lại
+    } else {
       setLdapModalOpen(false);
-      fetchUsers();
-    } catch (err) {
-      setLdapError(err.message);
-    } finally {
-      setLdapAdding(false);
     }
   }
 
@@ -229,80 +253,73 @@ export function Users() {
 
       {ldapModalOpen && (
         <div className="modal-backdrop" onClick={() => setLdapModalOpen(false)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-card ldap-modal" onClick={(e) => e.stopPropagation()}>
             <h3>{t('users.addLdap')}</h3>
 
-            {!ldapPicked ? (
-              <>
-                <form onSubmit={handleLdapSearch} className="row-actions" style={{ marginBottom: 12 }}>
-                  <input
-                    value={ldapQuery}
-                    onChange={(e) => setLdapQuery(e.target.value)}
-                    placeholder={t('users.ldapSearchPlaceholder')}
-                    minLength={2}
-                    required
-                    autoFocus
-                    style={{ flex: 1 }}
-                  />
-                  <button type="submit" className="btn-primary" disabled={ldapSearching}>
-                    {ldapSearching ? t('common.loading') : t('users.ldapSearch')}
-                  </button>
-                </form>
+            <form onSubmit={handleLdapSearch} className="ldap-search-bar">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+              <input
+                value={ldapQuery}
+                onChange={(e) => setLdapQuery(e.target.value)}
+                placeholder={t('users.ldapSearchPlaceholder')}
+                minLength={2}
+                required
+                autoFocus
+              />
+              <button type="submit" disabled={ldapSearching}>
+                {ldapSearching ? t('common.loading') : t('users.ldapSearch')}
+              </button>
+            </form>
 
-                {ldapError && <div className="error-box">{ldapError}</div>}
+            {ldapError && <div className="error-box">{ldapError}</div>}
 
-                {ldapResults && (
-                  ldapResults.length === 0 ? (
-                    <div className="empty-state">{t('users.ldapNoResults')}</div>
-                  ) : (
-                    <div className="table-scroll">
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th>{t('users.username')}</th>
-                            <th>{t('users.fullName')}</th>
-                            <th></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {ldapResults.map((r) => (
-                            <tr key={r.username}>
-                              <td className="mono">{r.username}</td>
-                              <td>{r.full_name}</td>
-                              <td><button type="button" className="btn-primary" onClick={() => pickLdapResult(r)}>{t('users.ldapPick')}</button></td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )
-                )}
+            {ldapResults && (
+              ldapResults.length === 0 ? (
+                <div className="empty-state">{t('users.ldapNoResults')}</div>
+              ) : (
+                <>
+                  <div className="ldap-list-head">
+                    <label className="ldap-select-all">
+                      <input type="checkbox" checked={ldapResults.every((r) => ldapSelected.has(r.username))} onChange={toggleLdapSelectAll} />
+                      {t('users.ldapSelectAll')}
+                    </label>
+                    <span className="ldap-hint">
+                      {t('users.ldapSelectedCount', { selected: ldapSelected.size, total: ldapResults.length })}
+                      {ldapTruncated ? ` · ${t('users.ldapTruncated')}` : ''}
+                    </span>
+                  </div>
+                  <div className="ldap-results">
+                    {ldapResults.map((r) => (
+                      <label className="ldap-result-row" key={r.username}>
+                        <input type="checkbox" checked={ldapSelected.has(r.username)} onChange={() => toggleLdapSelect(r.username)} />
+                        <div className="ldap-result-avatar">{r.full_name.charAt(0).toUpperCase()}</div>
+                        <div className="ldap-result-info">
+                          <b>{r.full_name}</b>
+                          <span className="mono">{r.username}{r.email ? ` · ${r.email}` : ''}</span>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )
+            )}
 
-                <div className="modal-actions">
-                  <button type="button" onClick={() => setLdapModalOpen(false)}>{t('common.cancel')}</button>
-                </div>
-              </>
-            ) : (
-              <form onSubmit={handleLdapAdd}>
-                <p><strong>{ldapPicked.full_name}</strong> <span className="mono">({ldapPicked.username})</span></p>
-
-                <label>{t('users.role')}</label>
-                <select value={ldapAddForm.role} onChange={(e) => setLdapAddForm({ ...ldapAddForm, role: e.target.value })}>
+            <div className="ldap-bulk-footer">
+              <label className="ldap-bulk-role">
+                {t('users.role')}
+                <select value={ldapBulkRole} onChange={(e) => setLdapBulkRole(e.target.value)}>
                   <option value="staff">{t('role.staff')}</option>
                   <option value="admin">{t('role.adminShort')}</option>
                   {isSuperAdmin && <option value="superadmin">{t('role.superadmin')}</option>}
                 </select>
-
-                {ldapError && <div className="error-box">{ldapError}</div>}
-
-                <div className="modal-actions">
-                  <button type="button" onClick={() => setLdapPicked(null)}>{t('common.back')}</button>
-                  <button type="submit" className="btn-primary" disabled={ldapAdding}>
-                    {ldapAdding ? t('common.loading') : t('common.save')}
-                  </button>
-                </div>
-              </form>
-            )}
+              </label>
+              <div className="modal-actions">
+                <button type="button" onClick={() => setLdapModalOpen(false)}>{t('common.cancel')}</button>
+                <button type="button" className="btn-primary" disabled={ldapAdding || ldapSelected.size === 0} onClick={handleLdapBulkAdd}>
+                  {ldapAdding ? t('common.loading') : t('users.ldapAddSelected', { count: ldapSelected.size })}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

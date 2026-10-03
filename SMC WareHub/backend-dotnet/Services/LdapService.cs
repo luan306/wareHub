@@ -30,18 +30,31 @@ public sealed class LdapService(IOptions<LdapOptions> options, ILogger<LdapServi
         return connection;
     }
 
-    /// <summary>Tìm tối đa 20 người dùng AD có tên hiển thị hoặc tài khoản (sAMAccountName) chứa từ khoá.</summary>
-    public Task<List<LdapUserMatch>> SearchUsersAsync(string query, CancellationToken ct) => Task.Run(() =>
+    // Trần số dòng lấy về cho MỖI yêu cầu — không phải "tổng số account AD": công ty có thể có hàng nghìn tài khoản,
+    // kéo hết về 1 lần vừa chậm vừa dễ treo trình duyệt khi render. 500 đủ cho hầu hết công ty vừa/nhỏ; nếu công ty
+    // nhiều hơn, gõ tìm để lọc bớt lại thay vì liệt kê hết.
+    public const int MaxResults = 500;
+
+    /// <summary>
+    /// Tìm người dùng AD có tên hiển thị hoặc tài khoản (sAMAccountName) chứa từ khoá, tối đa <see cref="MaxResults"/>
+    /// dòng. Để trống query thì liệt kê luôn (không bắt gõ trước) — mở khung "Thêm từ LDAP" là thấy ngay danh sách
+    /// thay vì ô trống trơn.
+    /// </summary>
+    public Task<List<LdapUserMatch>> SearchUsersAsync(string? query, CancellationToken ct) => Task.Run(() =>
     {
         if (!IsConfigured) throw new InvalidOperationException("Chưa cấu hình kết nối LDAP (mục \"Ldap\" trong cấu hình).");
         ct.ThrowIfCancellationRequested();
-        var safe = EscapeFilter(query);
         using var connection = Connect();
         connection.Credential = new NetworkCredential(_options.BindUsername, _options.BindPassword);
         connection.Bind();
 
-        var filter = $"(&(objectCategory=person)(objectClass=user)(|(cn=*{safe}*)(sAMAccountName=*{safe}*)))";
+        var filter = string.IsNullOrWhiteSpace(query)
+            ? "(&(objectCategory=person)(objectClass=user))"
+            : $"(&(objectCategory=person)(objectClass=user)(|(cn=*{EscapeFilter(query)}*)(sAMAccountName=*{EscapeFilter(query)}*)))";
         var request = new SearchRequest(_options.BaseDn, filter, SearchScope.Subtree, "cn", "sAMAccountName", "mail");
+        // Chặn ở tầng LDAP luôn (không chỉ cắt bớt sau khi lấy về) — base DN cả công ty có thể rất nhiều user,
+        // không giới hạn ở server AD thì mỗi lần mở khung (query rỗng) sẽ kéo về toàn bộ, chậm và tốn băng thông.
+        request.SizeLimit = MaxResults;
         var response = (SearchResponse)connection.SendRequest(request);
 
         var results = new List<LdapUserMatch>();
@@ -53,7 +66,7 @@ public sealed class LdapService(IOptions<LdapOptions> options, ILogger<LdapServi
             if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(fullName))
                 results.Add(new LdapUserMatch(username, fullName, email));
         }
-        return results.Take(20).ToList();
+        return results.Take(MaxResults).ToList();
     }, ct);
 
     /// <summary>

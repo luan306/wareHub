@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Text.RegularExpressions;
 
@@ -105,6 +106,36 @@ public sealed partial class GlpiClient
         var html = await FetchTabHtmlAsync("NetworkPort", glpiId, ct);
         return (html, GlpiParsers.ExtractIpFromHtml(html));
     }
+
+    /// <summary>
+    /// Lấy 1 trường (scrape web) cho nhiều máy cùng lúc (song song có giới hạn, dùng chung Glpi:DetailConcurrency với
+    /// các nguồn REST khác). Lỗi ở 1 máy không làm hỏng các máy còn lại — chỉ ghi cảnh báo 1 lần chung cho cả lượt
+    /// thay vì lặp lại cho từng máy lỗi. Dùng chung cho IP (tab NetworkPort) và Delivery form (tab Infocom).
+    /// </summary>
+    private async Task<Dictionary<int, string?>> FetchTabFieldForComputersAsync(
+        IEnumerable<int> glpiIds, string warnKey, string warnLabel,
+        Func<int, CancellationToken, Task<string?>> fetchOne, GlpiDetailReport report, CancellationToken ct)
+    {
+        var results = new ConcurrentDictionary<int, string?>();
+        var ids = glpiIds.Distinct().ToList();
+        var failures = 0;
+        using var gate = new SemaphoreSlim(Math.Clamp(_options.DetailConcurrency, 1, 20));
+        await Task.WhenAll(ids.Select(async id =>
+        {
+            await gate.WaitAsync(ct);
+            try { results[id] = await fetchOne(id, ct); }
+            catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException) { Interlocked.Increment(ref failures); }
+            finally { gate.Release(); }
+        }));
+        if (failures > 0) report.Warn(warnKey, $"Không đọc được {warnLabel} (scrape web) cho {failures}/{ids.Count} máy.");
+        return new Dictionary<int, string?>(results);
+    }
+
+    public Task<Dictionary<int, string?>> FetchIpForComputersAsync(IEnumerable<int> glpiIds, GlpiDetailReport report, CancellationToken ct = default) =>
+        FetchTabFieldForComputersAsync(glpiIds, "ip-web", "IP", async (id, c) => (await FetchNetworkPortTabAsync(id, c)).Ip, report, ct);
+
+    public Task<Dictionary<int, string?>> FetchDeliveryFormForComputersAsync(IEnumerable<int> glpiIds, GlpiDetailReport report, CancellationToken ct = default) =>
+        FetchTabFieldForComputersAsync(glpiIds, "deliveryform-web", "Delivery form", async (id, c) => (await FetchInfocomTabAsync(id, c)).DeliveryForm, report, ct);
 
     /// <summary>Lấy HTML thô của tab "Infocom" (thông tin quản lý/tài chính) và số "Delivery form" tách được từ đó.</summary>
     public async Task<(string Html, string? DeliveryForm)> FetchInfocomTabAsync(int glpiId, CancellationToken ct = default)

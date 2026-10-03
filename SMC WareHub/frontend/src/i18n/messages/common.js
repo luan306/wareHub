@@ -109,7 +109,12 @@ export const common = {
   'users.ldapSearchPlaceholder': ['Gõ tên hoặc tài khoản AD...', 'Type an AD name or username...'],
   'users.ldapSearch': ['Tìm', 'Search'],
   'users.ldapNoResults': ['Không tìm thấy tài khoản AD nào khớp (hoặc đã có sẵn trong WareHub).', 'No matching AD account found (or it already exists in WareHub).'],
-  'users.ldapPick': ['Chọn', 'Pick'],
+  'users.ldapResultCount': ['{count} tài khoản', '{count} accounts'],
+  'users.ldapSelectAll': ['Chọn tất cả', 'Select all'],
+  'users.ldapSelectedCount': ['Đã chọn {selected} / {total}', 'Selected {selected} / {total}'],
+  'users.ldapTruncated': ['còn nhiều hơn, gõ tìm để thu hẹp lại', 'more exist, search to narrow down'],
+  'users.ldapAddSelected': ['Thêm {count} tài khoản', 'Add {count} accounts'],
+  'users.ldapBulkPartialFail': ['Thêm thất bại {failed}/{total} tài khoản, các tài khoản đó vẫn còn trong danh sách để thử lại.', 'Failed to add {failed}/{total} accounts, they remain in the list to retry.'],
   'users.ldapPasswordNote': ['Tài khoản gắn LDAP — mật khẩu quản lý bên Active Directory, không đặt lại được ở đây.', 'LDAP-linked account — password is managed in Active Directory, cannot be reset here.'],
 
   'history.title': ['Lịch sử thay đổi thiết bị', 'Device change history'],

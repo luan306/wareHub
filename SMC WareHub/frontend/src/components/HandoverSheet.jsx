@@ -265,7 +265,7 @@ export function AttachmentSheet({ data }) {
 
 const WINDOWS_OPTIONS = ['Win 11 Professional', 'Win 10 Professional'];
 const OFFICE_OPTIONS = ['Office 365', 'Office 2016', 'Office 2019', 'Office 2024'];
-const ADAPTER_OPTIONS = ['Adapter Dell 65W', 'PSU C13'];
+const ADAPTER_OPTIONS = ['Adapter Dell 65W', 'Adapter Dell 45W', 'PSU C13'];
 const PHONE_ADAPTER_OPTIONS = ['SAMSUNG Fast Charge Adapter', 'N/A'];
 const PERIPHERALS_OPTIONS = ['Wire Mouse and Keyboard', 'Wireless Dell', 'N/A'];
 
@@ -512,6 +512,8 @@ export function HandoverModal({ device, saved, onClose }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [issued, setIssued] = useState(Boolean(saved));
+  // true khi người dùng tự gõ số phiếu (thay vì để hệ thống tự cấp) — dùng để tắt việc tự động lấy/ghi đè số dự kiến.
+  const [manualNo, setManualNo] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [monitorPickerOpen, setMonitorPickerOpen] = useState(false);
   const [attachmentPickerOpen, setAttachmentPickerOpen] = useState(false);
@@ -561,6 +563,7 @@ export function HandoverModal({ device, saved, onClose }) {
   }, [saved, initial.draft, deviceId, device?.model]);
 
   useEffect(() => {
+    if (manualNo) return undefined; // đang tự gõ số — không để hệ thống tự cấp đè lên nữa
     const allocated = allocatedRef.current;
     if (allocated && allocated.startsWith(monthPrefix(data.register_date))) {
       setIssued(true);
@@ -573,18 +576,29 @@ export function HandoverModal({ device, saved, onClose }) {
       .then((result) => { if (!cancelled) setData((current) => ({ ...current, no: result.no })); })
       .catch(() => { if (!cancelled) setData((current) => ({ ...current, no: '' })); });
     return () => { cancelled = true; };
-  }, [data.register_date]);
+  }, [data.register_date, manualNo]);
+
+  // Gõ tay vào ô "Số phiếu": tắt tự cấp. Xoá trống ô lại thì quay về tự cấp như cũ.
+  function updateNoField(value) {
+    setManualNo(value.trim().length > 0);
+    updateField('no', value);
+  }
 
   async function persist() {
     const { no: shownNo, ...payload } = data;
-    let no = allocatedRef.current && allocatedRef.current.startsWith(monthPrefix(data.register_date)) ? allocatedRef.current : null;
-    if (no) {
-      await api.put(`/handovers/${no}`, { full_name: data.full_name, data: payload });
-    } else {
-      const result = await api.post('/handovers', { device_id: deviceId ?? null, register_date: data.register_date || null, full_name: data.full_name, data: payload });
+    // Đã lưu 1 lần rồi (dù tự cấp hay tự gõ) thì sửa tiếp trên ĐÚNG phiếu đó (PUT theo số cũ) — số tự gõ không nhất
+    // thiết theo định dạng YYMMxxx nên không áp điều kiện "cùng tháng" như số tự cấp.
+    let existingNo = allocatedRef.current && (manualNo || allocatedRef.current.startsWith(monthPrefix(data.register_date))) ? allocatedRef.current : null;
+    let no;
+    if (existingNo) {
+      // In lại phiếu cũ mà đổi số (gõ tay khác với số đang lưu) -> gửi kèm "no" mới để đổi luôn số của phiếu đó.
+      const result = await api.put(`/handovers/${existingNo}`, { full_name: data.full_name, data: payload, no: manualNo && shownNo && shownNo !== existingNo ? shownNo : null });
       no = result.no;
-      allocatedRef.current = no;
+    } else {
+      const result = await api.post('/handovers', { device_id: deviceId ?? null, register_date: data.register_date || null, full_name: data.full_name, data: payload, no: manualNo ? (shownNo || null) : null });
+      no = result.no;
     }
+    allocatedRef.current = no;
     savedRef.current = true;
     setIssued(true);
     flushSync(() => setData((current) => ({ ...current, no })));
@@ -686,8 +700,8 @@ export function HandoverModal({ device, saved, onClose }) {
                     {group.titleKey === 'hv.group.slip' && (
                       <label className="hv-no-field">
                         {t('hv.noField')}
-                        <input className="form-control" value={data.no} readOnly />
-                        <span className="hv-hint">{issued ? t('hv.noIssued') : t('hv.noPending')}</span>
+                        <input className="form-control" value={data.no} maxLength={12} onChange={(event) => updateNoField(event.target.value)} />
+                        <span className="hv-hint">{manualNo ? t('hv.noManual') : issued ? t('hv.noIssued') : t('hv.noPending')}</span>
                       </label>
                     )}
                   </div>

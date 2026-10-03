@@ -447,14 +447,18 @@ export function Devices() {
     setError('');
     setBulkHandoverBusy(true);
     try {
+      // Lấy thông số cũ (nếu có) cho tất cả thiết bị CÙNG LÚC — bước này độc lập giữa các thiết bị, không cần
+      // giữ thứ tự, nên không có lý do bắt chờ tuần tự (chỉ riêng bước TẠO phiếu bên dưới mới cần tuần tự).
+      const latestResults = await Promise.all(chosen.map((device) =>
+        api.get('/handovers/latest', { device_id: device.id, model: device.model || '' }).catch(() => null)));
+
       const created = [];
       // Tạo tuần tự từng phiếu (không song song) để số phiếu YYMMxxx cấp ra đúng thứ tự liền mạch, không bị chen ngang.
-      for (const device of chosen) {
+      for (let i = 0; i < chosen.length; i++) {
+        const device = chosen[i];
         let base = buildHandoverData(device);
-        try {
-          const latest = await api.get('/handovers/latest', { device_id: device.id, model: device.model || '' });
-          if (latest.found && latest.data) base = mergeSpecs(base, latest.data, { overwrite: false });
-        } catch { /* không lấy được thông số cũ thì để trống, không chặn cả lượt tạo */ }
+        const latest = latestResults[i];
+        if (latest?.found && latest.data) base = mergeSpecs(base, latest.data, { overwrite: false });
         const { no: _no, ...payload } = base;
         const result = await api.post('/handovers', { device_id: device.id, register_date: base.register_date, full_name: base.full_name, data: payload });
         created.push({ ...payload, no: result.no });
@@ -810,6 +814,13 @@ export function Devices() {
               <div className="form-row mb-3">
                 <div className="form-col"><label className="form-label">{t('field.os_name')}</label><input className="form-control" value={form.os_name} onChange={(e) => setForm({ ...form, os_name: e.target.value })} placeholder="Win 11 Professional" /></div>
                 <div className="form-col"><label className="form-label">{t('field.office_name')}</label><input className="form-control" value={form.office_name} onChange={(e) => setForm({ ...form, office_name: e.target.value })} placeholder="Office 365" /></div>
+              </div>
+              <div className="form-row mb-3">
+                <div className="form-col"><label className="form-label">{t('field.phong_ban')}</label><input className="form-control" value={form.phong_ban} onChange={(e) => setForm({ ...form, phong_ban: e.target.value })} /></div>
+                <div className="form-col"><label className="form-label">{t('field.date')}</label><input type="date" className="form-control" value={form.registered_at} onChange={(e) => setForm({ ...form, registered_at: e.target.value })} /></div>
+              </div>
+              <div className="form-row mb-3">
+                <div className="form-col" style={{ flex: '1 1 100%' }}><label className="form-label">{t('field.ghi_chu')}</label><textarea className="form-control" rows={2} value={form.ghi_chu} onChange={(e) => setForm({ ...form, ghi_chu: e.target.value })} /></div>
               </div>
               {form.loai === 'phone' && (
                 <div className="form-row mb-3">

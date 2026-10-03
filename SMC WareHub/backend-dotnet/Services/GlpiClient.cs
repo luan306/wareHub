@@ -22,8 +22,8 @@ public sealed class GlpiAsset
     public GlpiRef? Model { get; set; }
     public GlpiRef? Type { get; set; }
     public GlpiRef? Location { get; set; }
-    // "Delivery form" của máy tính trong GLPI (nếu có) — công ty dùng số này làm số phiếu bàn giao từ trước khi có WareHub.
-    public string? Deliveryform { get; set; }
+    // "Delivery form" KHÔNG nằm trong API REST (đã xác nhận trên GLPI thật) — lấy qua scrape web (Infocom tab,
+    // xem GlpiWebScrape.cs), không phải field JSON như các trường khác ở đây.
     // Mọi trường JSON không khớp property nào ở trên (vd SIM có "msin" — Mobile Subscriber Identification Number — không
     // có sẵn chỗ chứa riêng): giữ lại thô để đọc thử theo nhiều tên trường khác nhau bằng ExtraString, không cần biết
     // trước chính xác GLPI đặt tên gì.

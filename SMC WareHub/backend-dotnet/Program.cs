@@ -272,6 +272,15 @@ devices.MapGet("/", async (string? search, string? loai, string? lifecycle_statu
         "ghi_chu" => x => x.GhiChu ?? "",
         "registered_at" => x => x.RegisteredAt ?? DateOnly.MinValue,
         "updated_at" => x => x.UpdatedAt,
+        // Các cột này bấm được ở giao diện (COLUMN_DEFS trong Devices.jsx) nhưng thiếu ở đây — bấm vào tiêu đề tưởng
+        // đã sắp xếp (mũi tên vẫn đổi chiều) nhưng danh sách thực ra không đổi gì, luôn rơi về mặc định CreatedAt.
+        "cpu" => x => x.Cpu ?? "",
+        "ram" => x => x.Ram ?? "",
+        "storage" => x => x.Storage ?? "",
+        "os_name" => x => x.OsName ?? "",
+        "office_name" => x => x.OfficeName ?? "",
+        "phone_number" => x => x.PhoneNumber ?? "",
+        "sim_serial" => x => x.SimSerial ?? "",
         _ => x => x.CreatedAt,
     };
     query = descending ? query.OrderByDescending(keySelector) : query.OrderBy(keySelector);
@@ -358,7 +367,7 @@ devices.MapPost("/{id:int}/clone", async (int id, CloneRequest request, WareHubD
     if (string.IsNullOrWhiteSpace(request.Ma)) return Results.BadRequest(new { error = "Vui lòng nhập mã thiết bị mới" });
     var source = await db.Devices.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id);
     if (source is null) return Results.NotFound(new { error = "Không tìm thấy thiết bị gốc" });
-    var clone = new Device { Ma = request.Ma.Trim(), Ten = source.Ten, Loai = source.Loai, Kho = source.Kho, Model = source.Model, Cpu = source.Cpu, Ram = source.Ram, Storage = source.Storage, IsActive = true, LifecycleStatus = "old", UserName = source.UserName, RegisteredAt = source.RegisteredAt, PhongBan = source.PhongBan, GhiChu = source.GhiChu, Producer = source.Producer, IpAddress = source.IpAddress, OsName = source.OsName, OfficeName = source.OfficeName };
+    var clone = new Device { Ma = request.Ma.Trim(), Ten = source.Ten, Loai = source.Loai, Kho = source.Kho, Model = source.Model, Cpu = source.Cpu, Ram = source.Ram, Storage = source.Storage, IsActive = true, LifecycleStatus = "old", UserName = source.UserName, RegisteredAt = source.RegisteredAt, PhongBan = source.PhongBan, GhiChu = source.GhiChu, Producer = source.Producer, IpAddress = source.IpAddress, OsName = source.OsName, OfficeName = source.OfficeName, PhoneNumber = source.PhoneNumber, SimSerial = source.SimSerial };
     db.Devices.Add(clone); try { await db.SaveChangesAsync(); return Results.Created($"/api/devices/{clone.Id}", new { id = clone.Id }); } catch (DbUpdateException) { return Results.Conflict(new { error = $"Mã thiết bị \"{request.Ma}\" đã tồn tại" }); }
 }).RequireAuthorization("admin");
 devices.MapDelete("/{id:int}", async (int id, WareHubDbContext db) =>
@@ -376,14 +385,20 @@ users.MapGet("/", async (WareHubDbContext db) => Results.Ok(new
 users.MapGet("/ldap-search", async (string? q, LdapService ldap, WareHubDbContext db, CancellationToken ct) =>
 {
     var query = q?.Trim();
-    if (string.IsNullOrWhiteSpace(query) || query.Length < 2) return Results.BadRequest(new { error = "Nhập ít nhất 2 ký tự để tìm" });
+    // Để trống thì liệt kê sẵn (không bắt gõ trước); chỉ chặn khi gõ ĐÚNG 1 ký tự (lọc gần như không tác dụng, tốn công AD quét).
+    if (query?.Length == 1) return Results.BadRequest(new { error = "Nhập ít nhất 2 ký tự để tìm" });
     if (!ldap.IsConfigured) return Results.BadRequest(new { error = "Chưa cấu hình kết nối LDAP (mục \"Ldap\" trong cấu hình)." });
     List<LdapUserMatch> matches;
     try { matches = await ldap.SearchUsersAsync(query, ct); }
     catch (Exception ex) when (ex is LdapException or InvalidOperationException) { return Results.BadRequest(new { error = $"Không kết nối được LDAP: {ex.Message}" }); }
     // Lọc bớt những tài khoản đã có sẵn trong WareHub (local lẫn đã gắn LDAP từ trước) — tránh thêm trùng.
     var existing = (await db.Users.Select(x => x.Username).ToListAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-    return Results.Ok(new { results = matches.Where(m => !existing.Contains(m.Username)).Select(m => new { username = m.Username, full_name = m.FullName, email = m.Email }) });
+    return Results.Ok(new
+    {
+        results = matches.Where(m => !existing.Contains(m.Username)).Select(m => new { username = m.Username, full_name = m.FullName, email = m.Email }),
+        // AD trả về đúng bằng trần (MaxResults) thường nghĩa là còn nhiều hơn chưa lấy hết — báo để người dùng biết gõ tìm thu hẹp lại.
+        truncated = matches.Count >= LdapService.MaxResults,
+    });
 });
 users.MapPost("/ldap-add", async (LdapAddRequest request, HttpContext context, WareHubDbContext db, IPasswordHasher<User> hasher) =>
 {
@@ -417,16 +432,21 @@ users.MapPost("/", async (UserCreateRequest request, HttpContext context, WareHu
 users.MapPut("/{id:int}", async (int id, UserUpdateRequest request, HttpContext context, WareHubDbContext db, IPasswordHasher<User> hasher) =>
 {
     var user = await db.Users.FindAsync(id); if (user is null) return Results.NotFound(new { error = "Không tìm thấy người dùng" });
+    var currentUser = (User)context.Items["CurrentUser"]!;
     // Admin tự hạ quyền/khoá chính mình sẽ làm hệ thống không còn ai quản trị; việc này phải do admin khác làm.
-    if (((User)context.Items["CurrentUser"]!).Id == id && ((request.Role is not null && request.Role != user.Role) || request.IsActive == false))
+    if (currentUser.Id == id && ((request.Role is not null && request.Role != user.Role) || request.IsActive == false))
         return Results.BadRequest(new { error = "Không thể tự đổi vai trò hoặc tự khoá chính mình" });
+    // Chỉ superadmin được đụng tới vai trò/trạng thái hoạt động/mật khẩu của 1 superadmin khác — kiểm tra ở ĐẦU hàm,
+    // trước khi áp bất kỳ thay đổi nào, để bao được cả 3 trường cùng lúc (trước đây chỉ chặn khi đổi "role", nên admin
+    // thường vẫn đổi được mật khẩu hoặc khoá tài khoản 1 superadmin khác qua 2 trường IsActive/Password còn lại).
+    var targetIsOrBecomesSuperadmin = user.Role == "superadmin" || request.Role == "superadmin";
+    if (targetIsOrBecomesSuperadmin && currentUser.Role != "superadmin"
+        && (request.Role is not null || request.IsActive.HasValue || !string.IsNullOrWhiteSpace(request.Password)))
+        return Results.Forbid();
     if (request.FullName is not null) { if (string.IsNullOrWhiteSpace(request.FullName)) return Results.BadRequest(new { error = "Họ tên không được để trống" }); user.FullName = request.FullName.Trim(); }
     if (request.Role is not null)
     {
         if (request.Role is not ("admin" or "staff" or "superadmin")) return Results.BadRequest(new { error = "Vai trò không hợp lệ" });
-        var currentUser = (User)context.Items["CurrentUser"]!;
-        // Chỉ superadmin được phong/giáng superadmin — admin thường không được đụng tới cấp cao nhất (kể cả hạ quyền 1 superadmin khác).
-        if ((request.Role == "superadmin" || user.Role == "superadmin") && currentUser.Role != "superadmin") return Results.Forbid();
         user.Role = request.Role;
     }
     if (request.IsActive.HasValue) user.IsActive = request.IsActive.Value;
@@ -457,13 +477,14 @@ print.MapPost("/", async (PrintRequest request, HttpContext context, WareHubDbCo
     var deviceRows = devicesFound.Select(x => new { x.Id, x.Ma, x.Ten, x.Loai, x.Kho, x.Model, x.Cpu, x.Ram, x.Storage, x.IsActive, x.LifecycleStatus, x.UserName, x.RegisteredAt, x.PhongBan, x.GhiChu, x.Producer, x.IpAddress }).ToList();
     return Results.Ok(new { devices = deviceRows });
 });
-print.MapGet("/history", async (string? from, string? to, string? search, int page = 1, int pageSize = 30, WareHubDbContext db = null!) =>
+print.MapGet("/history", async (string? from, string? to, string? search, int? page, int? pageSize, WareHubDbContext db) =>
 {
-    page = Math.Max(page, 1); pageSize = Math.Clamp(pageSize, 1, 100); search = ClampText(search, 100); var query = db.PrintHistory.AsNoTracking().AsQueryable();
+    var (currentPage, limit) = ParsePaging(page, pageSize, defaultSize: 30);
+    search = ClampText(search, 100); var query = db.PrintHistory.AsNoTracking().AsQueryable();
     if (DateTime.TryParse(from, out var fromDate)) query = query.Where(x => x.PrintedAt >= fromDate.Date);
     if (DateTime.TryParse(to, out var toDate)) query = query.Where(x => x.PrintedAt < toDate.Date.AddDays(1));
     if (!string.IsNullOrWhiteSpace(search)) query = query.Where(x => x.Device.Ma.Contains(search) || x.Device.Ten.Contains(search) || x.User.FullName.Contains(search));
-    var total = await query.CountAsync(); var rows = await query.OrderByDescending(x => x.PrintedAt).Skip((page - 1) * pageSize).Take(pageSize).Select(x => new { x.Id, printed_at = x.PrintedAt, x.Device.Ma, x.Device.Ten, x.Device.Loai, x.Device.Kho, printed_by = x.User.FullName }).ToListAsync(); return Results.Ok(new { history = rows, total, page, pageSize });
+    var total = await query.CountAsync(); var rows = await query.OrderByDescending(x => x.PrintedAt).Skip((currentPage - 1) * limit).Take(limit).Select(x => new { x.Id, printed_at = x.PrintedAt, x.Device.Ma, x.Device.Ten, x.Device.Loai, x.Device.Kho, printed_by = x.User.FullName }).ToListAsync(); return Results.Ok(new { history = rows, total, page = currentPage, pageSize = limit });
 });
 
 var handovers = app.MapGroup("/api/handovers").RequireAuthorization();
@@ -479,6 +500,14 @@ handovers.MapPost("/", async (HandoverRequest request, HttpContext context, Ware
     if (day.Year is < 2000 or > 2099) return Results.BadRequest(new { error = "Ngày lập biên bản không hợp lệ" });
     var device = request.DeviceId is int deviceId ? await db.Devices.AsNoTracking().SingleOrDefaultAsync(x => x.Id == deviceId) : null;
     var user = (User)context.Items["CurrentUser"]!;
+    // Người dùng tự gõ số phiếu (vd. để khớp số cũ ghi trên giấy/GLPI) thay vì để hệ thống tự cấp theo YYMMxxx.
+    var customNo = Truncate(request.No, 12);
+    if (!string.IsNullOrWhiteSpace(customNo))
+    {
+        db.Handovers.Add(new Handover { No = customNo, DeviceId = device?.Id, DeviceMa = device?.Ma, FullName = Truncate(request.FullName, 100), Payload = HandoverPayload(request.Data), UserId = user.Id });
+        try { await db.SaveChangesAsync(); return Results.Ok(new { no = customNo }); }
+        catch (DbUpdateException) { return Results.Conflict(new { error = $"Số phiếu \"{customNo}\" đã tồn tại" }); }
+    }
     // Hai người in cùng lúc có thể tính ra cùng một số; unique index trên `no` chặn trùng, ta thử lại với số kế tiếp.
     for (var attempt = 0; attempt < 5; attempt++)
     {
@@ -493,6 +522,13 @@ handovers.MapPut("/{no}", async (string no, HandoverUpdateRequest request, WareH
 {
     var handover = await db.Handovers.SingleOrDefaultAsync(x => x.No == no);
     if (handover is null) return Results.NotFound(new { error = "Không tìm thấy phiếu" });
+    // In lại phiếu cũ đôi khi cần đổi luôn số phiếu (vd. khớp lại với số ghi tay/GLPI) — cho đổi nếu gửi kèm "no" khác số hiện tại.
+    var newNo = Truncate(request.No, 12);
+    if (!string.IsNullOrWhiteSpace(newNo) && newNo != handover.No)
+    {
+        if (await db.Handovers.AnyAsync(x => x.No == newNo)) return Results.Conflict(new { error = $"Số phiếu \"{newNo}\" đã tồn tại" });
+        handover.No = newNo;
+    }
     handover.FullName = Truncate(request.FullName, 100);
     handover.Payload = HandoverPayload(request.Data);
     await db.SaveChangesAsync();
@@ -675,6 +711,33 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
     {
         try { details = await glpi.GetDetailsForComputersAsync(computers.Where(c => !string.IsNullOrWhiteSpace(c.Serial)).Select(c => c.Id), detailReport, (done, total) => job.Report("computers", done, total), ct); }
         catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException) { detailReport.Warn("all", $"Không lấy được chi tiết máy tính: {ex.Message}"); }
+
+        // REST API không có đường dẫn IP cho bản GLPI này (đã xác nhận 404) — lấy bằng cách đọc tab "Network ports"
+        // trên giao diện web (xem GlpiWebScrape.cs). Gắn vào bản ghi details sẵn có, không ghi đè CPU/RAM/ổ cứng đã lấy.
+        if (glpi.ScrapeIpEnabled)
+        {
+            job.Report("computers-ip");
+            try
+            {
+                var ips = await glpi.FetchIpForComputersAsync(details.Keys, detailReport, ct);
+                foreach (var (glpiId, ip) in ips)
+                {
+                    if (string.IsNullOrWhiteSpace(ip)) continue;
+                    details[glpiId] = details.TryGetValue(glpiId, out var existing) ? existing with { Ip = ip } : new GlpiComputerDetails(null, null, null, ip, null, null);
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException) { detailReport.Warn("ip-web", $"Không lấy được IP (scrape web): {ex.Message}"); }
+        }
+    }
+
+    // "Delivery form" (số phiếu bàn giao cũ trước khi có WareHub) cũng KHÔNG có trong REST API (đã xác nhận trên
+    // GLPI thật) — chỉ đọc được qua tab "Infocom" trên giao diện web, giống cách lấy IP ở trên.
+    var deliveryForms = new Dictionary<int, string?>();
+    if (glpi.DetailsEnabled && glpi.ScrapeDeliveryFormEnabled && computers.Count > 0)
+    {
+        job.Report("computers-deliveryform");
+        try { deliveryForms = await glpi.FetchDeliveryFormForComputersAsync(computers.Where(c => !string.IsNullOrWhiteSpace(c.Serial)).Select(c => c.Id), detailReport, ct); }
+        catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException) { detailReport.Warn("deliveryform-web", $"Không lấy được Delivery form (scrape web): {ex.Message}"); }
     }
     if (glpi.DetailsEnabled && phones.Count > 0)
     {
@@ -761,7 +824,8 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
             created++;
             device = newDevice;
         }
-        if (loai == "laptop" && Truncate(c.Deliveryform, 12) is { Length: > 0 } deliveryNo) pendingLegacyHandovers.Add((device, deliveryNo));
+        if (loai == "laptop" && deliveryForms.TryGetValue(c.Id, out var rawDeliveryNo) && Truncate(rawDeliveryNo, 12) is { Length: > 0 } deliveryNo)
+            pendingLegacyHandovers.Add((device, deliveryNo));
     }
 
     job.Report("saving");

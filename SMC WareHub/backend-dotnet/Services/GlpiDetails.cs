@@ -46,6 +46,8 @@ public sealed partial class GlpiClient
     private readonly ConcurrentDictionary<string, int> _sourceSuccesses = new();
 
     public bool DetailsEnabled => _options.SyncDetails;
+    public bool ScrapeIpEnabled => _options.ScrapeIpFromWeb;
+    public bool ScrapeDeliveryFormEnabled => _options.ScrapeDeliveryFormFromWeb;
 
     private string VersionPrefix()
     {
