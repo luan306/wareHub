@@ -254,6 +254,14 @@ a { color: var(--primary); }
 .lang-switch button:hover { color: var(--primary); }
 .lang-switch button.active { background: var(--primary); color: #fff; }
 .login-lang { position: absolute; top: 18px; right: 22px; z-index: 2; }
+
+/* Tab lọc loại phiếu bàn giao (Tất cả / Máy tính / Điện thoại-Tablet) — cùng ngôn ngữ thiết kế với .lang-switch,
+   chỉ đổi bo góc nhỏ hơn (999px bo tròn quá mức với nhãn dài 3 lựa chọn) và không co hẹp chữ. */
+.hv-kind-tabs { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); overflow: hidden; flex-shrink: 0; }
+.hv-kind-tabs button { border: 0; background: transparent; color: var(--ink-soft); font: 600 13px var(--font-body); padding: 0 14px; height: 38px; cursor: pointer; white-space: nowrap; }
+.hv-kind-tabs button:not(:last-child) { border-right: 1px solid var(--line); }
+.hv-kind-tabs button:hover { color: var(--primary); }
+.hv-kind-tabs button.active { background: var(--primary); color: #fff; }
 .content { padding: 28px 40px 42px; max-width: none; width: 100%; }
 
 /* ==========================================================================

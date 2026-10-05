@@ -23,6 +23,7 @@ export function Handovers() {
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [search, setSearch] = useState('');
+  const [kind, setKind] = useState(''); // '' = tất cả, 'computer', 'phone'
   const [error, setError] = useState('');
   const [selected, setSelected] = useState(() => new Map());
   const [openItem, setOpenItem] = useState(null);
@@ -33,7 +34,7 @@ export function Handovers() {
     const version = ++requestVersion.current;
     setError('');
     try {
-      const data = await api.get('/handovers', { search, page, pageSize });
+      const data = await api.get('/handovers', { search, kind: kind || undefined, page, pageSize });
       if (version !== requestVersion.current) return;
       setItems(data.handovers);
       setTotal(data.total);
@@ -42,7 +43,7 @@ export function Handovers() {
     } catch (err) {
       if (version === requestVersion.current) setError(err.message);
     }
-  }, [search, page, pageSize]);
+  }, [search, kind, page, pageSize]);
 
   useEffect(() => {
     const timer = setTimeout(fetchItems, 250);
@@ -51,20 +52,22 @@ export function Handovers() {
 
   useReconnect(fetchItems);
 
+  // Dùng id (không phải "no") làm khoá chọn/so khớp — "no" không còn là duy nhất toàn cục từ khi tách 2 dãy số
+  // máy tính/điện thoại-tablet (2 nhóm có thể cùng ra 1 chuỗi "no" giống nhau, phân biệt nhau bằng cột "kind").
   function toggleOne(item) {
     setSelected((previous) => {
       const next = new Map(previous);
-      if (next.has(item.no)) next.delete(item.no); else next.set(item.no, item);
+      if (next.has(item.id)) next.delete(item.id); else next.set(item.id, item);
       return next;
     });
   }
 
-  const allOnPageSelected = items.length > 0 && items.every((item) => selected.has(item.no));
+  const allOnPageSelected = items.length > 0 && items.every((item) => selected.has(item.id));
 
   function toggleAll() {
     setSelected((previous) => {
       const next = new Map(previous);
-      items.forEach((item) => { if (allOnPageSelected) next.delete(item.no); else next.set(item.no, item); });
+      items.forEach((item) => { if (allOnPageSelected) next.delete(item.id); else next.set(item.id, item); });
       return next;
     });
   }
@@ -72,8 +75,8 @@ export function Handovers() {
   async function handleDelete(item) {
     if (!confirm(t('hvp.confirmDelete', { no: item.no, name: item.full_name ? ` (${item.full_name})` : '' }))) return;
     try {
-      await api.del(`/handovers/${item.no}`);
-      setSelected((previous) => { const next = new Map(previous); next.delete(item.no); return next; });
+      await api.del(`/handovers/${item.id}`);
+      setSelected((previous) => { const next = new Map(previous); next.delete(item.id); return next; });
       fetchItems();
     } catch (err) {
       setError(err.message);
@@ -105,6 +108,13 @@ export function Handovers() {
           value={search}
           onChange={(event) => { setPage(1); setSearch(event.target.value); }}
         />
+        <div className="hv-kind-tabs" role="group" aria-label={t('hvp.allKinds')}>
+          {[['', 'hvp.allKinds'], ['computer', 'hvp.kindComputer'], ['phone', 'hvp.kindPhone']].map(([value, key]) => (
+            <button key={value || 'all'} type="button" className={kind === value ? 'active' : ''} onClick={() => { setPage(1); setKind(value); }}>
+              {t(key)}
+            </button>
+          ))}
+        </div>
       </div>
       {error && <div className="error-box">{error}</div>}
 
@@ -128,8 +138,8 @@ export function Handovers() {
           </thead>
           <tbody>
             {items.map((item) => (
-              <tr key={item.no}>
-                <td><input type="checkbox" checked={selected.has(item.no)} onChange={() => toggleOne(item)} /></td>
+              <tr key={item.id}>
+                <td><input type="checkbox" checked={selected.has(item.id)} onChange={() => toggleOne(item)} /></td>
                 <td className="action-col">
                   <div className="row-actions">
                     <button type="button" className="print-now-action" onClick={() => setOpenItem(item)}>{t('hvp.openReprint')}</button>
@@ -158,7 +168,7 @@ export function Handovers() {
       <Pager page={page} pageSize={pageSize} total={total} totalPages={totalPages} unit={t('unit.slips')} onPage={setPage} onPageSize={(size) => { setPage(1); setPageSize(size); }} />
 
       {openItem && (
-        <HandoverModal key={openItem.no} saved={openItem} onClose={() => { setOpenItem(null); fetchItems(); }} />
+        <HandoverModal key={openItem.id} saved={openItem} onClose={() => { setOpenItem(null); fetchItems(); }} />
       )}
 
       {printItems && createPortal(
@@ -166,7 +176,7 @@ export function Handovers() {
           {printItems.map((item) => {
             const sheetData = { ...buildHandoverData({}), ...(item.data || {}), no: item.no };
             return (
-              <Fragment key={item.no}>
+              <Fragment key={item.id}>
                 <HandoverSheet data={sheetData} />
                 {(sheetData.attachments || []).length > 0 && <AttachmentSheet data={sheetData} />}
               </Fragment>

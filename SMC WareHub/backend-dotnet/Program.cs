@@ -201,6 +201,20 @@ app.MapGet("/api/ready", async (WareHubDbContext db, CancellationToken cancellat
     await db.Database.CanConnectAsync(cancellationToken)
         ? Results.Ok(new { ready = true, version = buildId })
         : Results.Json(new { ready = false, version = buildId }, statusCode: StatusCodes.Status503ServiceUnavailable));
+// TẠM THỜI — chẩn đoán vụ IP luôn ra 127.0.0.1 khi vào qua domain/IIS, và vụ đăng nhập qua domain báo sai mật khẩu.
+// Xoá cả 2 endpoint debug này sau khi xong việc (POST echo lại y nguyên những gì backend nhận được, kể cả mật khẩu — chỉ
+// dùng tạm để chẩn đoán, không được để lại trên bản chạy thật).
+app.MapGet("/api/_debug/headers", (HttpContext context) => Results.Ok(new
+{
+    remote_ip = context.Connection.RemoteIpAddress?.ToString(),
+    headers = context.Request.Headers.ToDictionary(h => h.Key, h => h.Value.ToString()),
+}));
+app.MapPost("/api/_debug/echo", async (HttpContext context) =>
+{
+    using var reader = new StreamReader(context.Request.Body);
+    var body = await reader.ReadToEndAsync();
+    return Results.Ok(new { content_type = context.Request.ContentType, content_length = context.Request.ContentLength, raw_body = body, raw_body_length = body.Length });
+});
 app.MapGet("/api/maintenance", () => Results.Ok(maintenance.Current));
 app.MapPut("/api/maintenance", (MaintenanceRequest request) =>
 {
@@ -494,11 +508,11 @@ print.MapGet("/history", async (string? from, string? to, string? search, int? p
 });
 
 var handovers = app.MapGroup("/api/handovers").RequireAuthorization();
-handovers.MapGet("/next-no", async (DateOnly? date, WareHubDbContext db) =>
+handovers.MapGet("/next-no", async (DateOnly? date, string? loai, WareHubDbContext db) =>
 {
     var day = date ?? DateOnly.FromDateTime(DateTime.Today);
     if (day.Year is < 2000 or > 2099) return Results.BadRequest(new { error = "Ngày lập biên bản không hợp lệ" });
-    return Results.Ok(new { no = await NextHandoverNoAsync(db, day) });
+    return Results.Ok(new { no = await NextHandoverNoAsync(db, day, HandoverKind(loai)) });
 });
 handovers.MapPost("/", async (HandoverRequest request, HttpContext context, WareHubDbContext db) =>
 {
@@ -506,39 +520,44 @@ handovers.MapPost("/", async (HandoverRequest request, HttpContext context, Ware
     if (day.Year is < 2000 or > 2099) return Results.BadRequest(new { error = "Ngày lập biên bản không hợp lệ" });
     var device = request.DeviceId is int deviceId ? await db.Devices.AsNoTracking().SingleOrDefaultAsync(x => x.Id == deviceId) : null;
     var user = (User)context.Items["CurrentUser"]!;
+    var kind = HandoverKind(device?.Loai);
     // Người dùng tự gõ số phiếu (vd. để khớp số cũ ghi trên giấy/GLPI) thay vì để hệ thống tự cấp theo YYMMxxx.
     var customNo = Truncate(request.No, 12);
     if (!string.IsNullOrWhiteSpace(customNo))
     {
-        db.Handovers.Add(new Handover { No = customNo, DeviceId = device?.Id, DeviceMa = device?.Ma, FullName = Truncate(request.FullName, 100), Payload = HandoverPayload(request.Data), UserId = user.Id, CreatedByName = user.FullName });
-        try { await db.SaveChangesAsync(); return Results.Ok(new { no = customNo }); }
+        var handover = new Handover { No = customNo, Kind = kind, DeviceId = device?.Id, DeviceMa = device?.Ma, FullName = Truncate(request.FullName, 100), Payload = HandoverPayload(request.Data), UserId = user.Id, CreatedByName = user.FullName };
+        db.Handovers.Add(handover);
+        try { await db.SaveChangesAsync(); return Results.Ok(new { no = customNo, id = handover.Id }); }
         catch (DbUpdateException) { return Results.Conflict(new { error = $"Số phiếu \"{customNo}\" đã tồn tại" }); }
     }
-    // Hai người in cùng lúc có thể tính ra cùng một số; unique index trên `no` chặn trùng, ta thử lại với số kế tiếp.
+    // Hai người in cùng lúc có thể tính ra cùng một số; khoá duy nhất (no, kind) chặn trùng, ta thử lại với số kế tiếp.
     for (var attempt = 0; attempt < 5; attempt++)
     {
-        var no = await NextHandoverNoAsync(db, day);
-        db.Handovers.Add(new Handover { No = no, DeviceId = device?.Id, DeviceMa = device?.Ma, FullName = Truncate(request.FullName, 100), Payload = HandoverPayload(request.Data), UserId = user.Id, CreatedByName = user.FullName });
-        try { await db.SaveChangesAsync(); return Results.Ok(new { no }); }
+        var no = await NextHandoverNoAsync(db, day, kind);
+        var handover = new Handover { No = no, Kind = kind, DeviceId = device?.Id, DeviceMa = device?.Ma, FullName = Truncate(request.FullName, 100), Payload = HandoverPayload(request.Data), UserId = user.Id, CreatedByName = user.FullName };
+        db.Handovers.Add(handover);
+        try { await db.SaveChangesAsync(); return Results.Ok(new { no, id = handover.Id }); }
         catch (DbUpdateException) { db.ChangeTracker.Clear(); }
     }
     return Results.Conflict(new { error = "Không cấp được số phiếu, vui lòng thử lại" });
 });
-handovers.MapPut("/{no}", async (string no, HandoverUpdateRequest request, WareHubDbContext db) =>
+// Dùng id (không phải "no") làm khoá định danh trên đường dẫn — "no" không còn là duy nhất toàn cục từ khi tách 2 dãy
+// số máy tính/điện thoại-tablet (2 nhóm có thể cùng ra 1 chuỗi "no" giống nhau, phân biệt nhau bằng cột "kind").
+handovers.MapPut("/{id:int}", async (int id, HandoverUpdateRequest request, WareHubDbContext db) =>
 {
-    var handover = await db.Handovers.SingleOrDefaultAsync(x => x.No == no);
+    var handover = await db.Handovers.FindAsync(id);
     if (handover is null) return Results.NotFound(new { error = "Không tìm thấy phiếu" });
     // In lại phiếu cũ đôi khi cần đổi luôn số phiếu (vd. khớp lại với số ghi tay/GLPI) — cho đổi nếu gửi kèm "no" khác số hiện tại.
     var newNo = Truncate(request.No, 12);
     if (!string.IsNullOrWhiteSpace(newNo) && newNo != handover.No)
     {
-        if (await db.Handovers.AnyAsync(x => x.Id != handover.Id && x.No == newNo)) return Results.Conflict(new { error = $"Số phiếu \"{newNo}\" đã tồn tại" });
+        if (await db.Handovers.AnyAsync(x => x.Id != handover.Id && x.No == newNo && x.Kind == handover.Kind)) return Results.Conflict(new { error = $"Số phiếu \"{newNo}\" đã tồn tại" });
         handover.No = newNo;
     }
     handover.FullName = Truncate(request.FullName, 100);
     handover.Payload = HandoverPayload(request.Data);
     await db.SaveChangesAsync();
-    return Results.Ok(new { no = handover.No });
+    return Results.Ok(new { no = handover.No, id = handover.Id });
 });
 // Phiếu gần nhất của chính thiết bị; nếu chưa có thì lấy phiếu gần nhất của thiết bị cùng model để tái dùng thông số.
 handovers.MapGet("/latest", async (int device_id, string? model, WareHubDbContext db) =>
@@ -562,7 +581,7 @@ handovers.MapGet("/latest", async (int device_id, string? model, WareHubDbContex
     }
     return Results.Ok(new { found = false });
 });
-handovers.MapGet("/", async (string? search, int? page, int? pageSize, WareHubDbContext db) =>
+handovers.MapGet("/", async (string? search, string? kind, int? page, int? pageSize, WareHubDbContext db) =>
 {
     search = ClampText(search, 100);
     var query = db.Handovers.AsNoTracking().AsQueryable();
@@ -571,6 +590,9 @@ handovers.MapGet("/", async (string? search, int? page, int? pageSize, WareHubDb
         var term = search.Trim();
         query = query.Where(x => x.No.Contains(term) || (x.FullName ?? "").Contains(term) || (x.DeviceMa ?? "").Contains(term) || (x.Payload ?? "").Contains(term));
     }
+    // Tách tab "Điện thoại/Tablet" / "Máy tính": lọc thẳng theo cột Kind ("mobile"/"computer", xem HandoverKind).
+    if (kind == "phone") query = query.Where(x => x.Kind == "mobile");
+    else if (kind == "computer") query = query.Where(x => x.Kind == "computer");
     var (currentPage, limit) = ParsePaging(page, pageSize, defaultSize: 30);
     var total = await query.CountAsync();
     var rows = await query.OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id).Skip((currentPage - 1) * limit).Take(limit).ToListAsync();
@@ -588,9 +610,9 @@ handovers.MapGet("/", async (string? search, int? page, int? pageSize, WareHubDb
     });
     return Results.Ok(new { handovers = items, total, page = currentPage, pageSize = limit, totalPages = TotalPages(total, limit) });
 });
-handovers.MapDelete("/{no}", async (string no, WareHubDbContext db) =>
+handovers.MapDelete("/{id:int}", async (int id, WareHubDbContext db) =>
 {
-    var handover = await db.Handovers.SingleOrDefaultAsync(x => x.No == no);
+    var handover = await db.Handovers.FindAsync(id);
     if (handover is null) return Results.NotFound(new { error = "Không tìm thấy phiếu" });
     db.Handovers.Remove(handover);
     await db.SaveChangesAsync();
@@ -868,13 +890,17 @@ static int TotalPages(int total, int limit) => Math.Max((int)Math.Ceiling(total 
 // Nội dung phiếu là JSON do trang web gửi lên; chỉ nhận object và giới hạn dung lượng để không nhét rác vào DB.
 static string? HandoverPayload(JsonElement? data) =>
     data is { ValueKind: JsonValueKind.Object } value && value.GetRawText().Length <= 16_000 ? value.GetRawText() : null;
-// Số phiếu bàn giao dạng YYMMxxx: 2609001 = năm 26, tháng 09, phiếu thứ 001 của tháng đó.
-static async Task<string> NextHandoverNoAsync(WareHubDbContext db, DateOnly day)
+// Điện thoại/tablet dùng chung 1 dãy số riêng với máy tính — không phải loại thiết bị nào cũng cùng 1 lô giấy in sẵn.
+static string HandoverKind(string? loai) => loai is "phone" or "tablet" ? "mobile" : "computer";
+// Số phiếu bàn giao dạng YYMMxxx: 2609001 = năm 26, tháng 09, phiếu thứ 001 của tháng đó. Máy tính và điện thoại/tablet
+// dùng CHUNG định dạng (không có ký hiệu phân biệt trong chuỗi số) nhưng đếm riêng theo "kind" — 2 nhóm có thể cùng ra
+// "2609001" mà không coi là trùng, vì khoá duy nhất là (no, kind) chứ không phải riêng "no" (xem WareHubDbContext).
+static async Task<string> NextHandoverNoAsync(WareHubDbContext db, DateOnly day, string kind)
 {
     var prefix = $"{day.Year % 100:D2}{day.Month:D2}";
-    // Lấy hết số của tháng rồi tự đọc số lớn nhất ở client (thay vì sort chuỗi lấy 1 dòng cuối): phiếu "số liệu cũ" lấy
-    // từ trường Delivery form tự do bên GLPI không chắc đúng dạng số, int.Parse thẳng có thể lỗi 500 nếu dính rác.
-    var nos = await db.Handovers.AsNoTracking().Where(x => x.No.StartsWith(prefix)).Select(x => x.No).ToListAsync();
+    // Lấy hết số của tháng (CÙNG nhóm) rồi tự đọc số lớn nhất ở client (thay vì sort chuỗi lấy 1 dòng cuối): phiếu "số
+    // liệu cũ" lấy từ trường Delivery form tự do bên GLPI không chắc đúng dạng số, int.Parse thẳng có thể lỗi 500 nếu dính rác.
+    var nos = await db.Handovers.AsNoTracking().Where(x => x.Kind == kind && x.No.StartsWith(prefix)).Select(x => x.No).ToListAsync();
     var maxSequence = nos
         .Select(no => int.TryParse(no.AsSpan(prefix.Length), out var n) ? n : (int?)null)
         .Where(n => n is not null)
@@ -955,6 +981,7 @@ static async Task EnsureSchemaAsync(WareHubDbContext db)
     await EnsureIndexAsync(db, "print_history", "IX_print_history_PrintedAt", "`printed_at`");
     await EnsureDeviceHistoryTableAsync(db);
     await EnsureHandoverTableAsync(db);
+    await EnsureHandoverKindColumnAsync(db);
     await EnsureHistoryActorNameColumnsAsync(db);
     await EnsureIndexAsync(db, "handovers", "IX_handovers_CreatedAt", "`created_at`");
     // Chỉ mục thừa/không còn dùng — idx_devices_loai và idx_devices_phong_ban trùng cột với IX_devices_Loai/IX_devices_PhongBan ở trên (tạo ra ngoài code trước đây);
@@ -1041,10 +1068,12 @@ static async Task DropForeignKeysOnColumnAsync(WareHubDbContext db, string table
 #pragma warning restore EF1002
 static async Task EnsureHandoverTableAsync(WareHubDbContext db)
 {
+    // Khoá duy nhất gộp (no, kind) — máy tính và điện thoại/tablet đếm số riêng, được phép ra cùng 1 chuỗi "no".
     await db.Database.ExecuteSqlRawAsync("""
         CREATE TABLE IF NOT EXISTS handovers (
             Id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
             `no` VARCHAR(12) NOT NULL,
+            kind VARCHAR(10) NOT NULL DEFAULT 'computer',
             device_id INT NULL,
             device_ma VARCHAR(50) NULL,
             full_name VARCHAR(100) NULL,
@@ -1052,11 +1081,30 @@ static async Task EnsureHandoverTableAsync(WareHubDbContext db)
             user_id INT NOT NULL,
             created_by_name VARCHAR(100) NULL,
             created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            UNIQUE INDEX IX_handovers_no (`no`)
+            UNIQUE INDEX IX_handovers_no_kind (`no`, `kind`)
         )
         """);
     if (!await ColumnExistsAsync(db, "handovers", "payload"))
         await db.Database.ExecuteSqlRawAsync("ALTER TABLE handovers ADD COLUMN payload LONGTEXT NULL AFTER full_name");
+}
+// Tách dãy số riêng cho máy tính/điện thoại-tablet (xem HandoverKind, NextHandoverNoAsync): thêm cột "kind", dò lại
+// giá trị cho các phiếu đã có sẵn trước khi có cột này (theo thiết bị đã gắn, hoặc cờ "kind":"phone" cũ trong Payload
+// nếu thiết bị đã bị xoá/không gắn), rồi đổi khoá duy nhất từ chỉ "no" sang gộp (no, kind).
+static async Task EnsureHandoverKindColumnAsync(WareHubDbContext db)
+{
+    if (!await ColumnExistsAsync(db, "handovers", "kind"))
+    {
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE handovers ADD COLUMN kind VARCHAR(10) NOT NULL DEFAULT 'computer'");
+        await db.Database.ExecuteSqlRawAsync("""
+            UPDATE handovers h
+            LEFT JOIN devices d ON d.Id = h.device_id
+            SET h.kind = 'mobile'
+            WHERE d.Loai IN ('phone','tablet') OR (d.Id IS NULL AND h.payload LIKE '%"kind":"phone"%')
+            """);
+    }
+    await EnsureIndexDroppedAsync(db, "handovers", "IX_handovers_no");
+    if (!await IndexExistsAsync(db, "handovers", "IX_handovers_no_kind"))
+        await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IX_handovers_no_kind ON handovers (`no`, `kind`)");
 }
 static async Task EnsureDeviceHistoryTableAsync(WareHubDbContext db)
 {

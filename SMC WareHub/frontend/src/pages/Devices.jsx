@@ -461,7 +461,7 @@ export function Devices() {
         if (latest?.found && latest.data) base = mergeSpecs(base, latest.data, { overwrite: false });
         const { no: _no, ...payload } = base;
         const result = await api.post('/handovers', { device_id: device.id, register_date: base.register_date, full_name: base.full_name, data: payload });
-        created.push({ ...payload, no: result.no });
+        created.push({ ...payload, no: result.no, id: result.id });
       }
       setSelected(new Set());
       setSelectedDevices(new Map());
@@ -770,7 +770,7 @@ export function Devices() {
 
       {bulkHandoverItems && createPortal(
         <div className="handover-print-root">
-          {bulkHandoverItems.map((data) => <HandoverSheet key={data.no} data={data} />)}
+          {bulkHandoverItems.map((data) => <HandoverSheet key={data.id} data={data} />)}
         </div>,
         document.body,
       )}

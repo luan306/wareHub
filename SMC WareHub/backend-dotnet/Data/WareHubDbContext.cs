@@ -70,7 +70,10 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
         {
             entity.HasKey(x => x.Id);
             entity.Property(x => x.No).HasMaxLength(12).IsRequired();
-            entity.HasIndex(x => x.No).IsUnique();
+            entity.Property(x => x.Kind).HasMaxLength(10).IsRequired();
+            // Máy tính và điện thoại/tablet có 2 dãy số riêng, được phép trùng chuỗi "no" GIỮA 2 nhóm — chỉ không được
+            // trùng trong CÙNG 1 nhóm, nên khoá duy nhất phải gộp cả (no, kind), không còn là riêng "no" như trước.
+            entity.HasIndex(x => new { x.No, x.Kind }).IsUnique().HasDatabaseName("IX_handovers_no_kind");
             entity.Property(x => x.DeviceMa).HasMaxLength(50);
             entity.Property(x => x.FullName).HasMaxLength(100);
             entity.Property(x => x.CreatedByName).HasMaxLength(100);

@@ -88,6 +88,9 @@ public sealed class Handover
 {
     public int Id { get; set; }
     [Column("no")] public string No { get; set; } = "";
+    /// <summary>"computer" hoặc "mobile" (điện thoại/tablet) — 2 dãy số riêng, được phép trùng NHAU giữa 2 nhóm (chỉ
+    /// không được trùng trong CÙNG 1 nhóm, xem khoá duy nhất gộp (no, kind) trong WareHubDbContext).</summary>
+    [Column("kind")] public string Kind { get; set; } = "computer";
     [Column("device_id")] public int? DeviceId { get; set; }
     [Column("device_ma")] public string? DeviceMa { get; set; }
     [Column("full_name")] public string? FullName { get; set; }

@@ -427,7 +427,7 @@ function HandoverPicker({ initialSearch, excludeNo, onPick, onCancel }) {
       onCancel={onCancel}
       renderRow={(item) => (
         <PickerRow
-          key={item.no}
+          key={item.id}
           no={item.no}
           title={item.data?.model || '—'}
           subtitle={[item.data?.cpu, item.data?.ram, item.data?.storage].filter(Boolean).join(' · ') || t('hv.pick.noSpecs')}
@@ -517,8 +517,9 @@ export function HandoverModal({ device, saved, onClose }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [monitorPickerOpen, setMonitorPickerOpen] = useState(false);
   const [attachmentPickerOpen, setAttachmentPickerOpen] = useState(false);
-  // Số phiếu chính thức đã cấp: lưu/in lại thì dùng lại số này (cập nhật nội dung), không tốn thêm số.
-  const allocatedRef = useRef(saved ? saved.no : null);
+  // Phiếu chính thức đã lưu: lưu/in lại thì sửa tiếp trên ĐÚNG bản ghi đó (theo id), không tốn thêm số. "no" một mình
+  // không còn là khoá duy nhất từ khi tách dãy số máy tính/điện thoại-tablet (2 nhóm có thể cùng ra 1 chuỗi "no").
+  const allocatedRef = useRef(saved ? { id: saved.id, no: saved.no } : null);
   const savedRef = useRef(false);
 
   // Đã lưu phiếu lên server thì bỏ bản nháp cục bộ, lần sau lấy từ phiếu đã lưu (không bị dính dữ liệu cũ).
@@ -565,18 +566,18 @@ export function HandoverModal({ device, saved, onClose }) {
   useEffect(() => {
     if (manualNo) return undefined; // đang tự gõ số — không để hệ thống tự cấp đè lên nữa
     const allocated = allocatedRef.current;
-    if (allocated && allocated.startsWith(monthPrefix(data.register_date))) {
+    if (allocated && allocated.no.startsWith(monthPrefix(data.register_date))) {
       setIssued(true);
-      setData((current) => (current.no === allocated ? current : { ...current, no: allocated }));
+      setData((current) => (current.no === allocated.no ? current : { ...current, no: allocated.no }));
       return undefined;
     }
     setIssued(false);
     let cancelled = false;
-    api.get('/handovers/next-no', { date: data.register_date })
+    api.get('/handovers/next-no', { date: data.register_date, loai: device?.loai || '' })
       .then((result) => { if (!cancelled) setData((current) => ({ ...current, no: result.no })); })
       .catch(() => { if (!cancelled) setData((current) => ({ ...current, no: '' })); });
     return () => { cancelled = true; };
-  }, [data.register_date, manualNo]);
+  }, [data.register_date, manualNo, device?.loai]);
 
   // Gõ tay vào ô "Số phiếu": tắt tự cấp. Xoá trống ô lại thì quay về tự cấp như cũ.
   function updateNoField(value) {
@@ -586,19 +587,19 @@ export function HandoverModal({ device, saved, onClose }) {
 
   async function persist() {
     const { no: shownNo, ...payload } = data;
-    // Đã lưu 1 lần rồi (dù tự cấp hay tự gõ) thì sửa tiếp trên ĐÚNG phiếu đó (PUT theo số cũ) — số tự gõ không nhất
+    // Đã lưu 1 lần rồi (dù tự cấp hay tự gõ) thì sửa tiếp trên ĐÚNG phiếu đó (PUT theo id) — số tự gõ không nhất
     // thiết theo định dạng YYMMxxx nên không áp điều kiện "cùng tháng" như số tự cấp.
-    let existingNo = allocatedRef.current && (manualNo || allocatedRef.current.startsWith(monthPrefix(data.register_date))) ? allocatedRef.current : null;
-    let no;
-    if (existingNo) {
+    let existing = allocatedRef.current && (manualNo || allocatedRef.current.no.startsWith(monthPrefix(data.register_date))) ? allocatedRef.current : null;
+    let no, id;
+    if (existing) {
       // In lại phiếu cũ mà đổi số (gõ tay khác với số đang lưu) -> gửi kèm "no" mới để đổi luôn số của phiếu đó.
-      const result = await api.put(`/handovers/${existingNo}`, { full_name: data.full_name, data: payload, no: manualNo && shownNo && shownNo !== existingNo ? shownNo : null });
-      no = result.no;
+      const result = await api.put(`/handovers/${existing.id}`, { full_name: data.full_name, data: payload, no: manualNo && shownNo && shownNo !== existing.no ? shownNo : null });
+      no = result.no; id = result.id;
     } else {
       const result = await api.post('/handovers', { device_id: deviceId ?? null, register_date: data.register_date || null, full_name: data.full_name, data: payload, no: manualNo ? (shownNo || null) : null });
-      no = result.no;
+      no = result.no; id = result.id;
     }
-    allocatedRef.current = no;
+    allocatedRef.current = { id, no };
     savedRef.current = true;
     setIssued(true);
     flushSync(() => setData((current) => ({ ...current, no })));
@@ -738,7 +739,7 @@ export function HandoverModal({ device, saved, onClose }) {
             <button type="button" className="btn-secondary hv-save" onClick={handleSave} disabled={busy}>{busy ? t('hv.saving') : t('common.save')}</button>
             <button type="button" className="btn-primary" onClick={handlePrint} disabled={busy}>{t('hv.printSlip')}</button>
           </div>
-          {pickerOpen && <HandoverPicker initialSearch={device?.model || data.model} excludeNo={allocatedRef.current} onPick={handlePick} onCancel={() => setPickerOpen(false)} />}
+          {pickerOpen && <HandoverPicker initialSearch={device?.model || data.model} excludeNo={allocatedRef.current?.no} onPick={handlePick} onCancel={() => setPickerOpen(false)} />}
           {monitorPickerOpen && <MonitorPicker onPick={handleMonitorPick} onCancel={() => setMonitorPickerOpen(false)} />}
           {attachmentPickerOpen && (
             <AttachmentPicker
