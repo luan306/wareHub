@@ -264,13 +264,24 @@ auth.MapPost("/login", async (LoginRequest request, HttpContext context, WareHub
 auth.MapGet("/me", (HttpContext context) => Results.Ok(new { user = UserDto((User)context.Items["CurrentUser"]!) })).RequireAuthorization();
 
 var devices = app.MapGroup("/api/devices").RequireAuthorization();
-devices.MapGet("/", async (string? search, string? loai, string? lifecycle_status, string? sortBy, string? sortDir, int? page, int? pageSize, WareHubDbContext db) =>
+devices.MapGet("/", async (string? search, string? loai, string? lifecycle_status, bool? printed, string? printed_from, string? printed_to, string? sortBy, string? sortDir, int? page, int? pageSize, WareHubDbContext db) =>
 {
     search = ClampText(search, 100);
     var query = db.Devices.AsNoTracking().AsQueryable();
     if (!string.IsNullOrWhiteSpace(search)) query = query.Where(x => x.Ma.Contains(search) || x.Ten.Contains(search) || (x.PhongBan ?? "").Contains(search) || (x.UserName ?? "").Contains(search) || (x.IpAddress ?? "").Contains(search));
     if (!string.IsNullOrWhiteSpace(loai)) query = query.Where(x => x.Loai == loai);
     if (!string.IsNullOrWhiteSpace(lifecycle_status)) query = query.Where(x => x.LifecycleStatus == lifecycle_status);
+    // Lọc thiết bị đã/chưa từng in tem — vd tìm lại đúng lô vừa in tem hôm nay (hoặc trong 1 khoảng ngày) để làm phiếu
+    // bàn giao, không phải nhớ tay từng mã. "Chưa in tem" không có chiều thời gian nên bỏ qua printed_from/to khi đó.
+    var hasPrintedDateFilter = !string.IsNullOrWhiteSpace(printed_from) || !string.IsNullOrWhiteSpace(printed_to);
+    if (printed == true || (printed != false && hasPrintedDateFilter))
+    {
+        var printedQuery = db.PrintHistory.AsQueryable();
+        if (DateTime.TryParse(printed_from, out var printedFromDate)) printedQuery = printedQuery.Where(p => p.PrintedAt >= printedFromDate.Date);
+        if (DateTime.TryParse(printed_to, out var printedToDate)) printedQuery = printedQuery.Where(p => p.PrintedAt < printedToDate.Date.AddDays(1));
+        query = query.Where(x => printedQuery.Any(p => p.DeviceId == x.Id));
+    }
+    else if (printed == false) query = query.Where(x => !db.PrintHistory.Any(p => p.DeviceId == x.Id));
     var descending = sortDir == "desc";
     // Chỉ nhận cột nằm trong danh sách cho phép sẵn — tránh nhận trực tiếp tên cột từ client vào OrderBy.
     Expression<Func<Device, object>> keySelector = sortBy switch

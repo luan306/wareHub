@@ -13,6 +13,11 @@ import { useReconnect } from '../context/ConnectionContext';
 
 const emptyForm = { id: null, source_id: null, original_ma: '', ma: '', ten: '', loai: 'laptop', model: '', producer: '', ip_address: '', cpu: '', ram: '', storage: '', os_name: '', office_name: '', phone_number: '', sim_serial: '', is_active: false, user_name: '', registered_at: '', phong_ban: '', ghi_chu: '' };
 
+function isoToday() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 // Cột của bảng thiết bị — bấm chuột phải vào tiêu đề bảng để tick ẩn/hiện từng cột.
 const COLUMN_DEFS = [
   { key: 'ma', labelKey: 'field.ma', className: 'mono', cell: (d) => d.ma },
@@ -55,6 +60,9 @@ function loadColumnVisibility() {
 // Khớp giới hạn deviceIds tối đa của endpoint POST /print ở backend — chặn sớm ở đây
 // để tránh render hàng trăm/nghìn tem cùng lúc làm treo trình duyệt trước khi kịp báo lỗi.
 const MAX_PRINT_BATCH = 500;
+// 1 phiếu gộp nhiều thiết bị cho CÙNG 1 người — không hợp lý khi lên tới hàng trăm như MAX_PRINT_BATCH (dành cho in
+// hàng loạt nhiều phiếu RIÊNG); chặn sớm, tránh render 1 bảng đính kèm khổng lồ nếu lỡ chọn sót từ lần tìm kiếm trước.
+const MAX_MERGE_ATTACHMENTS = 30;
 const LOAI_KEYS = Object.keys(LOAI_LABELS);
 
 const toggleInSet = (set, id) => {
@@ -96,6 +104,12 @@ export function Devices() {
   const [pageSize, setPageSize] = useState(50);
   const [search, setSearch] = useState('');
   const [loaiFilter, setLoaiFilter] = useState('');
+  // '' = tất cả, 'true' = đã in tem (ít nhất 1 lần), 'false' = chưa in tem — dùng để tìm lại đúng lô vừa in tem trước đó
+  // mà làm phiếu bàn giao, không phải nhớ tay từng mã. 2 ô ngày chỉ có tác dụng khi đang lọc "đã in tem" (thu hẹp lại
+  // vd chỉ trong hôm nay) — để trống là lấy mọi thời điểm.
+  const [printedFilter, setPrintedFilter] = useState('');
+  const [printedFrom, setPrintedFrom] = useState('');
+  const [printedTo, setPrintedTo] = useState('');
   const [sort, setSort] = useState({ by: null, dir: 'asc' });
   const [selected, setSelected] = useState(new Set());
   // Dữ liệu đầy đủ của từng thiết bị đã chọn (id -> device), lưu riêng ngoài `devices` (trang/kết quả tìm kiếm
@@ -116,6 +130,12 @@ export function Devices() {
   const [queuePrinting, setQueuePrinting] = useState(false);
   const [instantPrintDevice, setInstantPrintDevice] = useState(null);
   const [handoverDevice, setHandoverDevice] = useState(null);
+  // Chọn nhiều thiết bị rồi gộp vào 1 phiếu (1 người nhận nhiều máy) — thiết bị đầu tiên làm máy chính, phần còn
+  // lại đẩy thẳng vào danh sách đính kèm của phiếu (xem HandoverModal extraAttachments).
+  const [handoverAttachments, setHandoverAttachments] = useState(null);
+  // Hộp xác nhận trước khi tạo phiếu riêng/gộp phiếu — thay cho confirm() mặc định của trình duyệt (không style được,
+  // không xuống dòng đẹp cho danh sách dài). { type: 'bulk' | 'merge', devices: [...] } hoặc null khi đang đóng.
+  const [confirmBulkAction, setConfirmBulkAction] = useState(null);
   const [bulkHandoverBusy, setBulkHandoverBusy] = useState(false);
   const [bulkHandoverItems, setBulkHandoverItems] = useState(null);
   const [columnVisibility, setColumnVisibility] = useState(loadColumnVisibility);
@@ -129,12 +149,21 @@ export function Devices() {
   const [syncProgress, setSyncProgress] = useState(null); // { phase, done, total } từ máy chủ
   const requestVersion = useRef(0);
 
+  // Bộ lọc chung cho danh sách/xuất kho — tách riêng để không lặp lại 3 chỗ (trang hiện tại + 2 bước kéo toàn bộ trang khi xuất CSV).
+  function deviceFilterParams() {
+    return {
+      search, loai: loaiFilter, printed: printedFilter || undefined,
+      printed_from: printedFilter === 'true' ? printedFrom || undefined : undefined,
+      printed_to: printedFilter === 'true' ? printedTo || undefined : undefined,
+    };
+  }
+
   const fetchDevices = useCallback(async () => {
     const version = ++requestVersion.current;
     setLoading(true);
     setError('');
     try {
-      const data = await api.get('/devices', { search, loai: loaiFilter, page, pageSize, sortBy: sort.by || undefined, sortDir: sort.by ? sort.dir : undefined });
+      const data = await api.get('/devices', { ...deviceFilterParams(), page, pageSize, sortBy: sort.by || undefined, sortDir: sort.by ? sort.dir : undefined });
       if (version !== requestVersion.current) return;
       setDevices(data.devices);
       setTotalPages(data.total_pages);
@@ -145,7 +174,7 @@ export function Devices() {
     } finally {
       if (version === requestVersion.current) setLoading(false);
     }
-  }, [search, loaiFilter, page, pageSize, sort]);
+  }, [search, loaiFilter, printedFilter, printedFrom, printedTo, page, pageSize, sort]);
 
   useEffect(() => {
     const timer = setTimeout(fetchDevices, 250); // debounce khi gõ tìm kiếm
@@ -345,12 +374,12 @@ export function Devices() {
       // tổng số trang, rồi tải các trang còn lại song song (giới hạn số lượt cùng lúc) thay vì
       // tuần tự từng trang một — nhanh hơn nhiều lần khi dữ liệu lớn.
       const CONCURRENCY = 6;
-      const first = await api.get('/devices', { search, loai: loaiFilter, page: 1, pageSize: 100 });
+      const first = await api.get('/devices', { ...deviceFilterParams(), page: 1, pageSize: 100 });
       const pages = [first.devices];
       const remaining = Array.from({ length: first.total_pages - 1 }, (_, i) => i + 2);
       for (let i = 0; i < remaining.length; i += CONCURRENCY) {
         const batch = remaining.slice(i, i + CONCURRENCY);
-        const results = await Promise.all(batch.map((p) => api.get('/devices', { search, loai: loaiFilter, page: p, pageSize: 100 })));
+        const results = await Promise.all(batch.map((p) => api.get('/devices', { ...deviceFilterParams(), page: p, pageSize: 100 })));
         results.forEach((data) => { pages[data.page - 1] = data.devices; });
       }
       const all = pages.flat();
@@ -436,32 +465,78 @@ export function Devices() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function createBulkHandovers() {
+  // Gộp các thiết bị đang chọn vào 1 phiếu duy nhất (1 người nhận nhiều máy) — mở phiếu như bấm "Phiếu BG" bình
+  // thường (vẫn xem lại/sửa/điền tên người nhận trước khi in), chỉ khác là đã có sẵn các thiết bị còn lại trong
+  // danh sách đính kèm, không phải tự bấm "Thêm thiết bị" từng cái sau khi mở phiếu.
+  function mergeSelectedIntoOneHandover() {
+    const chosen = Array.from(selectedDevices.values());
+    if (chosen.length === 0) return;
+    if (chosen.length > MAX_MERGE_ATTACHMENTS) {
+      setError(t('dev.mergeTooMany', { max: MAX_MERGE_ATTACHMENTS, count: chosen.length }));
+      return;
+    }
+    // Hiện đúng danh sách mã thiết bị trước khi gộp (hộp thoại riêng, không phải confirm() mặc định của trình duyệt)
+    // — "selectedDevices" cố ý giữ nguyên qua các lần tìm kiếm khác nhau (để dùng cho hàng đợi in), nên 1 thiết bị
+    // chọn từ trước đó rồi quên bỏ chọn có thể vẫn còn lẫn trong này; thấy rõ danh sách thì bắt lỗi đó ngay.
+    setConfirmBulkAction({ type: 'merge', devices: chosen });
+  }
+
+  function doMergeSelectedIntoOneHandover(chosen) {
+    // Phiếu điện thoại/tablet có dãy số riêng với máy tính (xem backend HandoverKind) — nhóm nào có điện thoại/tablet
+    // thì phiếu PHẢI xếp vào nhóm đó, không phụ thuộc việc người dùng lỡ tick máy tính trước hay điện thoại trước.
+    const main = chosen.find((d) => d.loai === 'phone' || d.loai === 'tablet') || chosen[0];
+    const rest = chosen.filter((d) => d.id !== main.id);
+    setSelected(new Set());
+    setSelectedDevices(new Map());
+    setHandoverAttachments(rest);
+    setHandoverDevice(main);
+  }
+
+  function createBulkHandovers() {
     const chosen = Array.from(selectedDevices.values());
     if (chosen.length === 0) return;
     if (chosen.length > MAX_PRINT_BATCH) {
       setError(t('dev.bulkTooMany', { max: MAX_PRINT_BATCH, count: chosen.length }));
       return;
     }
-    if (!confirm(t('dev.bulkConfirm', { count: chosen.length }))) return;
+    setConfirmBulkAction({ type: 'bulk', devices: chosen });
+  }
+
+  async function doCreateBulkHandovers(chosen) {
     setError('');
     setBulkHandoverBusy(true);
     try {
-      // Lấy thông số cũ (nếu có) cho tất cả thiết bị CÙNG LÚC — bước này độc lập giữa các thiết bị, không cần
-      // giữ thứ tự, nên không có lý do bắt chờ tuần tự (chỉ riêng bước TẠO phiếu bên dưới mới cần tuần tự).
-      const latestResults = await Promise.all(chosen.map((device) =>
-        api.get('/handovers/latest', { device_id: device.id, model: device.model || '' }).catch(() => null)));
+      // Lấy thông số cũ (nếu có) cho tất cả thiết bị — bước này độc lập giữa các thiết bị, không cần giữ thứ tự,
+      // nhưng vẫn giới hạn số lượt cùng lúc (giống exportInventory) — chọn hàng trăm thiết bị một lúc mà bắn hết
+      // ngần ấy yêu cầu cùng lúc dễ vượt giới hạn kết nối của trình duyệt và dồn tải lên server không cần thiết.
+      const CONCURRENCY = 6;
+      const latestResults = new Array(chosen.length);
+      for (let i = 0; i < chosen.length; i += CONCURRENCY) {
+        const batch = chosen.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(batch.map((device) =>
+          api.get('/handovers/latest', { device_id: device.id, model: device.model || '' }).catch(() => null)));
+        results.forEach((result, j) => { latestResults[i + j] = result; });
+      }
 
       const created = [];
       // Tạo tuần tự từng phiếu (không song song) để số phiếu YYMMxxx cấp ra đúng thứ tự liền mạch, không bị chen ngang.
-      for (let i = 0; i < chosen.length; i++) {
-        const device = chosen[i];
-        let base = buildHandoverData(device);
-        const latest = latestResults[i];
-        if (latest?.found && latest.data) base = mergeSpecs(base, latest.data, { overwrite: false });
-        const { no: _no, ...payload } = base;
-        const result = await api.post('/handovers', { device_id: device.id, register_date: base.register_date, full_name: base.full_name, data: payload });
-        created.push({ ...payload, no: result.no, id: result.id });
+      try {
+        for (let i = 0; i < chosen.length; i++) {
+          const device = chosen[i];
+          let base = buildHandoverData(device);
+          const latest = latestResults[i];
+          if (latest?.found && latest.data) base = mergeSpecs(base, latest.data, { overwrite: false });
+          const { no: _no, ...payload } = base;
+          const result = await api.post('/handovers', { device_id: device.id, register_date: base.register_date, full_name: base.full_name, data: payload });
+          created.push({ ...payload, no: result.no, id: result.id });
+        }
+      } catch (err) {
+        // Lỗi giữa chừng: các phiếu TRƯỚC đó đã lưu thật trên server rồi (không huỷ được) — báo rõ đã tạo được bao
+        // nhiêu phiếu để người dùng không bấm tạo lại từ đầu (sẽ ra thêm phiếu trùng cho các thiết bị đã có rồi).
+        if (created.length > 0) {
+          throw new Error(t('dev.bulkPartialError', { done: created.length, total: chosen.length, error: err.message }));
+        }
+        throw err;
       }
       setSelected(new Set());
       setSelectedDevices(new Map());
@@ -472,6 +547,14 @@ export function Devices() {
     } finally {
       setBulkHandoverBusy(false);
     }
+  }
+
+  function runConfirmedBulkAction() {
+    const action = confirmBulkAction;
+    setConfirmBulkAction(null);
+    if (!action) return;
+    if (action.type === 'merge') doMergeSelectedIntoOneHandover(action.devices);
+    else doCreateBulkHandovers(action.devices);
   }
 
   function openCreateModal() {
@@ -567,6 +650,11 @@ export function Devices() {
           <button className="btn-secondary" type="button" onClick={createBulkHandovers} disabled={selected.size === 0 || bulkHandoverBusy}>
             {bulkHandoverBusy ? t('dev.creatingSlips') : `${t('dev.createSlips')}${selected.size > 0 ? ` (${selected.size})` : ''}`}
           </button>
+          {selected.size > 1 && (
+            <button className="btn-secondary" type="button" onClick={mergeSelectedIntoOneHandover} disabled={bulkHandoverBusy}>
+              {t('dev.mergeIntoOneSlip', { count: selected.size })}
+            </button>
+          )}
           <button className="btn-primary" type="button" onClick={openPrintListModal} disabled={selected.size === 0 && queue.length === 0}>
             {t('dev.printLabelList')}{queue.length > 0 ? ` (${queue.length})` : ''}
           </button>
@@ -585,6 +673,29 @@ export function Devices() {
             <option key={k} value={k}>{t(`loai.${k}`)}</option>
           ))}
         </select>
+        <select value={printedFilter} onChange={(e) => { setPage(1); setPrintedFilter(e.target.value); }}>
+          <option value="">{t('dev.allPrinted')}</option>
+          <option value="true">{t('dev.printedYes')}</option>
+          <option value="false">{t('dev.printedNo')}</option>
+        </select>
+        {printedFilter === 'true' && (
+          <>
+            <input type="date" value={printedFrom} onChange={(e) => { setPage(1); setPrintedFrom(e.target.value); }} title={t('dev.printedFrom')} />
+            <input type="date" value={printedTo} onChange={(e) => { setPage(1); setPrintedTo(e.target.value); }} title={t('dev.printedTo')} />
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => { const today = isoToday(); setPage(1); setPrintedFrom(today); setPrintedTo(today); }}
+            >
+              {t('dev.printedToday')}
+            </button>
+            {(printedFrom || printedTo) && (
+              <button type="button" className="btn-secondary" onClick={() => { setPage(1); setPrintedFrom(''); setPrintedTo(''); }}>
+                {t('common.cancel')}
+              </button>
+            )}
+          </>
+        )}
       </div>
       {error && <div className="error-box">{error}</div>}
 
@@ -755,6 +866,30 @@ export function Devices() {
         </div>
       )}
 
+      {confirmBulkAction && (
+        <div className="modal-backdrop" onClick={() => setConfirmBulkAction(null)}>
+          <div className="modal-card bulk-confirm-modal" onClick={(event) => event.stopPropagation()}>
+            <h3>{t(confirmBulkAction.type === 'merge' ? 'dev.mergeConfirmTitle' : 'dev.bulkConfirmTitle', { count: confirmBulkAction.devices.length })}</h3>
+            <p className="bulk-confirm-text">{t(confirmBulkAction.type === 'merge' ? 'dev.mergeConfirmBody' : 'dev.bulkConfirmBody')}</p>
+            <ul className="bulk-confirm-list">
+              {confirmBulkAction.devices.map((d) => (
+                <li key={d.id}>
+                  <span className="bulk-confirm-ma">{d.ma}</span>
+                  <span className="bulk-confirm-ten">{d.ten}</span>
+                  <span className="bulk-confirm-loai">{t(`loai.${d.loai}`)}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="modal-actions">
+              <button type="button" className="btn-secondary" onClick={() => setConfirmBulkAction(null)} disabled={bulkHandoverBusy}>{t('common.cancel')}</button>
+              <button type="button" className="btn-primary" onClick={runConfirmedBulkAction} disabled={bulkHandoverBusy}>
+                {t(confirmBulkAction.type === 'merge' ? 'dev.mergeIntoOneSlip' : 'dev.bulkConfirmButton', { count: confirmBulkAction.devices.length })}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {createPortal(
         <div id="print-area">
           {instantPrintDevice ? (
@@ -766,7 +901,14 @@ export function Devices() {
         document.body,
       )}
 
-      {handoverDevice && <HandoverModal key={handoverDevice.id} device={handoverDevice} onClose={() => setHandoverDevice(null)} />}
+      {handoverDevice && (
+        <HandoverModal
+          key={handoverDevice.id}
+          device={handoverDevice}
+          extraAttachments={handoverAttachments}
+          onClose={() => { setHandoverDevice(null); setHandoverAttachments(null); }}
+        />
+      )}
 
       {bulkHandoverItems && createPortal(
         <div className="handover-print-root">

@@ -412,10 +412,12 @@ function PickerRow({ no, title, subtitle, who, onClick }) {
   );
 }
 
-function HandoverPicker({ initialSearch, excludeNo, onPick, onCancel }) {
+// excludeId (không phải excludeNo): "no" chỉ duy nhất trong CÙNG 1 nhóm máy tính/điện thoại-tablet (xem backend
+// HandoverKind) — 1 phiếu nhóm khác có thể mang đúng số đó mà vẫn là phiếu hợp lệ để chọn, không được lọc nhầm ra.
+function HandoverPicker({ initialSearch, excludeId, onPick, onCancel }) {
   const { t } = useT();
   const picker = usePickerSearch(initialSearch || '', (search) => (
-    api.get('/handovers', { search, page: 1, pageSize: 20 }).then((result) => result.handovers.filter((item) => item.no !== excludeNo))
+    api.get('/handovers', { search, page: 1, pageSize: 20 }).then((result) => result.handovers.filter((item) => item.id !== excludeId))
   ));
   return (
     <PickerDialog
@@ -497,7 +499,10 @@ function AttachmentPicker({ excludeIds, onPick, onCancel }) {
   );
 }
 
-export function HandoverModal({ device, saved, onClose }) {
+// extraAttachments: chọn nhiều thiết bị cùng lúc ở trang Thiết bị rồi gộp vào 1 phiếu (1 người nhận nhiều máy) —
+// thiết bị đầu tiên làm máy chính, các thiết bị còn lại đẩy thẳng vào danh sách đính kèm ngay khi mở phiếu, không
+// cần mở lại phiếu đã lưu rồi bấm "Thêm thiết bị" từng cái một như trước.
+export function HandoverModal({ device, saved, extraAttachments, onClose }) {
   const { t } = useT();
   const deviceId = saved ? saved.device_id : device?.id;
   const draftEnabled = !saved && deviceId != null;
@@ -505,7 +510,12 @@ export function HandoverModal({ device, saved, onClose }) {
   const [initial] = useState(() => {
     if (saved) return { draft: null, data: { ...buildHandoverData(device || {}), ...(saved.data || {}), no: saved.no } };
     const draft = draftEnabled ? readDraft(deviceId) : null;
-    return { draft, data: { ...buildHandoverData(device), ...(draft || {}) } };
+    const base = { ...buildHandoverData(device), ...(draft || {}) };
+    // Thay hẳn (không gộp) danh sách đính kèm của bản nháp cũ — bản nháp cũ của ĐÚNG thiết bị chính này có thể còn
+    // sót thiết bị đính kèm từ 1 lần gộp TRƯỚC đó (đã đóng không lưu) không liên quan gì tới lần gộp mới đang làm;
+    // người dùng vừa tự chọn đúng danh sách này, không nên âm thầm lẫn thêm thiết bị cũ nào khác vào.
+    if (extraAttachments?.length) base.attachments = extraAttachments;
+    return { draft, data: base };
   });
   const [data, setData] = useState(initial.data);
   const [busy, setBusy] = useState(false);
@@ -739,7 +749,7 @@ export function HandoverModal({ device, saved, onClose }) {
             <button type="button" className="btn-secondary hv-save" onClick={handleSave} disabled={busy}>{busy ? t('hv.saving') : t('common.save')}</button>
             <button type="button" className="btn-primary" onClick={handlePrint} disabled={busy}>{t('hv.printSlip')}</button>
           </div>
-          {pickerOpen && <HandoverPicker initialSearch={device?.model || data.model} excludeNo={allocatedRef.current?.no} onPick={handlePick} onCancel={() => setPickerOpen(false)} />}
+          {pickerOpen && <HandoverPicker initialSearch={device?.model || data.model} excludeId={allocatedRef.current?.id} onPick={handlePick} onCancel={() => setPickerOpen(false)} />}
           {monitorPickerOpen && <MonitorPicker onPick={handleMonitorPick} onCancel={() => setMonitorPickerOpen(false)} />}
           {attachmentPickerOpen && (
             <AttachmentPicker

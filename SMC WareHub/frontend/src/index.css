@@ -480,6 +480,18 @@ a { color: var(--primary); }
 .kho-chip-count { font-size: 10.5px; color: var(--muted); }
 .kho-conflict-arrow { flex: none; color: var(--muted); font-size: 18px; }
 
+/* Hộp xác nhận tạo/gộp phiếu bàn giao hàng loạt — thay cho confirm() mặc định của trình duyệt (không style được). */
+.bulk-confirm-modal { width: min(480px, 100%); }
+.bulk-confirm-text { margin: 0 0 14px; color: var(--ink-soft); font-size: 13px; line-height: 1.5; }
+.bulk-confirm-list { list-style: none; margin: 0 0 20px; padding: 0; max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 5px; }
+.bulk-confirm-list li {
+  display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 8px 10px; font-size: 12.5px; background: var(--panel-soft);
+}
+.bulk-confirm-ma { font-weight: 700; color: var(--primary); flex: none; }
+.bulk-confirm-ten { flex: 1; min-width: 0; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bulk-confirm-loai { flex: none; color: var(--muted); font-size: 11px; font-weight: 600; }
+
 .modal-header, .modal-footer {
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px; padding: 18px 26px; border-bottom: 1px solid var(--line);
