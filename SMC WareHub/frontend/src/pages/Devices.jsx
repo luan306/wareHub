@@ -58,11 +58,10 @@ function loadColumnVisibility() {
 }
 
 // Khớp giới hạn deviceIds tối đa của endpoint POST /print ở backend — chặn sớm ở đây
-// để tránh render hàng trăm/nghìn tem cùng lúc làm treo trình duyệt trước khi kịp báo lỗi.
+// để tránh render hàng trăm/nghìn tem cùng lúc làm treo trình duyệt trước khi kịp báo lỗi. Dùng chung luôn cho cả
+// gộp nhiều thiết bị vào 1 phiếu (không giới hạn riêng thấp hơn nữa) — muốn gộp bao nhiêu cũng được, miễn trong mức
+// an toàn kỹ thuật này.
 const MAX_PRINT_BATCH = 500;
-// 1 phiếu gộp nhiều thiết bị cho CÙNG 1 người — không hợp lý khi lên tới hàng trăm như MAX_PRINT_BATCH (dành cho in
-// hàng loạt nhiều phiếu RIÊNG); chặn sớm, tránh render 1 bảng đính kèm khổng lồ nếu lỡ chọn sót từ lần tìm kiếm trước.
-const MAX_MERGE_ATTACHMENTS = 30;
 const LOAI_KEYS = Object.keys(LOAI_LABELS);
 
 const toggleInSet = (set, id) => {
@@ -471,8 +470,8 @@ export function Devices() {
   function mergeSelectedIntoOneHandover() {
     const chosen = Array.from(selectedDevices.values());
     if (chosen.length === 0) return;
-    if (chosen.length > MAX_MERGE_ATTACHMENTS) {
-      setError(t('dev.mergeTooMany', { max: MAX_MERGE_ATTACHMENTS, count: chosen.length }));
+    if (chosen.length > MAX_PRINT_BATCH) {
+      setError(t('dev.mergeTooMany', { max: MAX_PRINT_BATCH, count: chosen.length }));
       return;
     }
     // Hiện đúng danh sách mã thiết bị trước khi gộp (hộp thoại riêng, không phải confirm() mặc định của trình duyệt)
