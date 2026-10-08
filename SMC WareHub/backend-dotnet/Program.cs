@@ -362,6 +362,19 @@ devices.MapGet("/glpi-probe", (int id, HttpContext context, GlpiClient glpi) => 
 devices.MapGet("/glpi-probe-simcards", (GlpiClient glpi, CancellationToken ct) => GlpiProbeAsync(glpi, () => glpi.ProbeSimcardsAsync(ct))).RequireAuthorization("admin");
 // Liệt kê đường dẫn thật trong tài liệu API của GLPI chứa từ khoá (vd ?q=software) — dùng khi các đường dẫn tự đoán đều sai.
 devices.MapGet("/glpi-probe-paths", (string? q, GlpiClient glpi, CancellationToken ct) => GlpiProbeAsync(glpi, () => glpi.ProbeSpecPathsAsync(q, ct))).RequireAuthorization("admin");
+// TẠM THỜI — kiểm tra xem bản GLPI thật có trả trường "type" (Computer type: Desktop/Laptop) kèm theo danh sách máy
+// không, để chẩn đoán vì sao lọc "Desktop" vẫn trống dù đã đồng bộ. Xoá endpoint này sau khi xác định xong nguyên nhân.
+devices.MapGet("/glpi-probe-types", (GlpiClient glpi, CancellationToken ct) => GlpiProbeAsync(glpi, async () =>
+{
+    var computers = await glpi.GetComputersAsync(ct);
+    return new
+    {
+        total = computers.Count,
+        with_type = computers.Count(c => c.Type is not null),
+        distinct_type_names = computers.Select(c => c.Type?.Name).Distinct().ToList(),
+        sample = computers.Take(15).Select(c => new { c.Id, c.Serial, c.Name, type_name = c.Type?.Name, type_id = c.Type?.Id, extra_keys = c.Extra?.Keys.ToList() }),
+    };
+})).RequireAuthorization("admin");
 // Đồng bộ chạy nền (xem GlpiSyncJob): POST chỉ bắt đầu và trả lời ngay; GET /glpi-sync/status cho tiến độ và kết quả.
 devices.MapPost("/glpi-sync", (HttpContext context, GlpiClient glpi, GlpiSyncJob job, IServiceScopeFactory scopes, IHostApplicationLifetime lifetime) =>
 {
@@ -834,6 +847,9 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
             existing.Ma = serial;
             existing.GlpiId = c.Id;
             existing.GlpiType = loai;
+            // Desktop/laptop do GLPI quyết định (không phải người dùng tự chọn tay như các loại khác) — luôn cập nhật
+            // lại Loai hiển thị theo đúng Type mới nhất từ GLPI, để máy cũ gắn sai từ trước cũng tự sửa lại.
+            if (loai is "laptop" or "desktop" && existing.Loai is "laptop" or "desktop") existing.Loai = loai;
             ApplyGlpiAsset(existing, c);
             if (ApplyExtras(existing, loai, c.Id)) detailed++;
             var changes = DiffDevice(before, SnapshotDevice(existing));
