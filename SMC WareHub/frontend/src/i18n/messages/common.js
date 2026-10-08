@@ -62,6 +62,7 @@ export const common = {
   'unit.slips': ['phiếu', 'slips'],
 
   'loai.laptop': ['Laptop', 'Laptop'],
+  'loai.desktop': ['Máy bàn', 'Desktop'],
   'loai.tablet': ['Tablet', 'Tablet'],
   'loai.pda': ['PDA', 'PDA'],
   'loai.monitor': ['Màn hình', 'Monitor'],

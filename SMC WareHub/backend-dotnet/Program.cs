@@ -650,7 +650,7 @@ static string? ValidateDevice(DeviceRequest request)
 {
     if (string.IsNullOrWhiteSpace(request.Ma) || string.IsNullOrWhiteSpace(request.Ten) || string.IsNullOrWhiteSpace(request.Loai))
         return "Vui lòng nhập Mã, Tên và Loại thiết bị";
-    if (request.Loai is not ("laptop" or "tablet" or "pda" or "monitor" or "phone" or "printer"))
+    if (request.Loai is not ("laptop" or "desktop" or "tablet" or "pda" or "monitor" or "phone" or "printer"))
         return "Loại thiết bị không hợp lệ";
     var tooLong = new (string Label, string? Value, int Max)[]
     {
@@ -744,7 +744,10 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
     var (monitors, monitorError) = monitorsTask.Result;
     var (printers, printerError) = printersTask.Result;
 
-    var assets = computers.Select(c => (Asset: c, Loai: "laptop", Kho: "24"))
+    // GLPI gộp cả desktop lẫn laptop chung 1 loại tài sản "Computer" — phân biệt lại bằng trường "Type" (Computer type,
+    // vd xem Admin > Dropdowns > Assets > Computer type trong GLPI) nếu có ghi; không khớp/không có thì mặc định laptop
+    // (giữ đúng hành vi cũ, không đoán sai thành desktop cho những máy chưa gắn loại trong GLPI).
+    var assets = computers.Select(c => (Asset: c, Loai: ComputerLoai(c), Kho: "24"))
         .Concat(phones.Select(p => (Asset: p, Loai: "phone", Kho: "12")))
         .Concat(tablets.Select(t => (Asset: t, Loai: "tablet", Kho: "24")))
         .Concat(monitors.Select(m => (Asset: m, Loai: "monitor", Kho: "24")))
@@ -778,7 +781,7 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
     // Điền phần chi tiết riêng của từng loại (máy tính: cấu hình; điện thoại: SIM); true nếu GLPI có trả gì đó.
     bool ApplyExtras(Device device, string loai, int glpiId)
     {
-        if (loai == "laptop" && details.TryGetValue(glpiId, out var computer) && computer.HasAny) { ApplyDetails(device, computer); return true; }
+        if (loai is "laptop" or "desktop" && details.TryGetValue(glpiId, out var computer) && computer.HasAny) { ApplyDetails(device, computer); return true; }
         if (loai == "phone" && phoneDetails.TryGetValue(glpiId, out var sim) && sim.HasAny) { ApplyPhoneDetails(device, sim); return true; }
         return false;
     }
@@ -808,7 +811,11 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
         if (!seenSerials.Add(serial)) { duplicates++; continue; }
 
         // Khớp theo id GLPI trước (ổn định qua việc sửa seri); chỉ dò theo serial cho thiết bị chưa từng gắn id GLPI nào.
+        // Desktop/laptop cùng xuất phát từ 1 itemtype "Computer" của GLPI — thiết bị đã đồng bộ trước khi có phân biệt
+        // desktop/laptop (hoặc GLPI vừa đổi lại Type) có thể đang lưu glpi_type là loai CŨ, nên thử luôn loai còn lại
+        // của nhóm computer trước khi coi là thiết bị MỚI (không thì đồng bộ tiếp sẽ tưởng là máy mới, tạo trùng serial).
         Device? existing = existingByGlpiKey.TryGetValue((loai, c.Id), out var byGlpi) ? byGlpi
+            : loai is "laptop" or "desktop" && existingByGlpiKey.TryGetValue((loai == "laptop" ? "desktop" : "laptop", c.Id), out var byOtherComputerLoai) ? byOtherComputerLoai
             : existingBySerial.TryGetValue(serial, out var bySerial) && bySerial.GlpiId is null ? bySerial
             : null;
 
@@ -864,6 +871,12 @@ static async Task<(List<GlpiAsset> Items, string? Error)> TryFetchAsync(Func<Tas
     catch (HttpRequestException ex) { return ([], $"Không kết nối được tới GLPI: {ex.Message}"); }
     catch (TaskCanceledException) when (!ct.IsCancellationRequested) { return ([], "Không kết nối được tới GLPI: hết thời gian chờ"); }
 }
+// "Computer" trong GLPI gộp chung desktop và laptop — asset.Type là trường "Computer type" (GLPI: Admin > Dropdowns >
+// Assets > Computer type), chứa tên như "Desktop"/"Laptop"/"Server"... Chỉ nhận diện "desktop" qua tên (không phân biệt
+// hoa/thường, khớp chứa chuỗi — phòng trường hợp công ty đặt tên khác đi 1 chút, vd "Desktop PC"); mọi trường hợp khác
+// (kể cả chưa gắn loại) giữ nguyên "laptop" như hành vi cũ, không tự đoán khi không chắc.
+static string ComputerLoai(GlpiAsset asset) =>
+    asset.Type?.Name is { } typeName && typeName.Contains("desktop", StringComparison.OrdinalIgnoreCase) ? "desktop" : "laptop";
 // Thông tin chung của 1 tài sản GLPI (tên, model, hãng, người dùng, vị trí, ghi chú) chép vào thiết bị — dùng cho cả thêm mới lẫn cập nhật.
 static void ApplyGlpiAsset(Device device, GlpiAsset asset)
 {
