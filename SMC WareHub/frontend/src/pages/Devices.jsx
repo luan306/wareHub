@@ -407,10 +407,11 @@ export function Devices() {
     if (result.skipped) lines.push(t('dev.syncSkipped', { count: result.skipped }));
     if (result.skipped_names?.length > 0) lines.push(t('dev.syncSkippedNames', { names: result.skipped_names.join(', '), more: result.skipped > result.skipped_names.length ? '…' : '' }));
     if (result.duplicates) lines.push(t('dev.syncDuplicates', { count: result.duplicates }));
-    if (result.tablets || result.monitors) lines.push(t('dev.syncFetchedMore', { tablets: result.tablets ?? 0, monitors: result.monitors ?? 0 }));
+    if (result.tablets || result.monitors || result.printers) lines.push(t('dev.syncFetchedMore', { tablets: result.tablets ?? 0, monitors: result.monitors ?? 0, printers: result.printers ?? 0 }));
     if (result.phone_error) lines.push(t('dev.syncPhoneError', { error: translateServerMessage(result.phone_error) }));
     if (result.tablet_error) lines.push(t('dev.syncTabletError', { error: translateServerMessage(result.tablet_error) }));
     if (result.monitor_error) lines.push(t('dev.syncMonitorError', { error: translateServerMessage(result.monitor_error) }));
+    if (result.printer_error) lines.push(t('dev.syncPrinterError', { error: translateServerMessage(result.printer_error) }));
     lines.push(t('dev.syncDetailed', { count: result.detailed ?? 0 }));
     (result.detail_warnings || []).forEach((w) => lines.push(`⚠ ${translateServerMessage(w)}`));
     alert(lines.join('\n'));

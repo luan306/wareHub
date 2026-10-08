@@ -28,6 +28,9 @@ public sealed class GlpiOptions
     /// <summary>Đường dẫn lấy danh sách màn hình (Monitor).</summary>
     public string MonitorEndpoint { get; set; } = "/v2.3/Assets/Monitor";
 
+    /// <summary>Đường dẫn lấy danh sách máy in (Printer) — loại tài sản chuẩn của GLPI, giống Monitor.</summary>
+    public string PrinterEndpoint { get; set; } = "/v2.3/Assets/Printer";
+
     /// <summary>
     /// Đường dẫn lấy danh sách máy tính bảng. "Tablet Device" là loại tài sản tự định nghĩa trong GLPI nên đường dẫn
     /// dạng /v2.3/Assets/Custom/&lt;tên hệ thống&gt;. Để trống thì tự dò từ tài liệu API của GLPI (tìm mục có chữ "tablet").

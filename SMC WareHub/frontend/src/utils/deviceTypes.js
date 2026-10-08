@@ -5,4 +5,5 @@ export const LOAI_LABELS = {
   pda: 'PDA',
   monitor: 'Màn hình',
   phone: 'Điện thoại',
+  printer: 'Máy in',
 };

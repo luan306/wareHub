@@ -120,6 +120,8 @@ public sealed partial class GlpiClient(HttpClient http, IOptions<GlpiOptions> op
 
     public Task<List<GlpiAsset>> GetMonitorsAsync(CancellationToken ct = default) => GetAssetsAsync(_options.MonitorEndpoint, "màn hình", ct);
 
+    public Task<List<GlpiAsset>> GetPrintersAsync(CancellationToken ct = default) => GetAssetsAsync(_options.PrinterEndpoint, "máy in", ct);
+
     public async Task<List<GlpiAsset>> GetTabletsAsync(CancellationToken ct = default)
     {
         var endpoint = Blank(_options.TabletEndpoint);

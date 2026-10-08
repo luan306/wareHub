@@ -650,7 +650,7 @@ static string? ValidateDevice(DeviceRequest request)
 {
     if (string.IsNullOrWhiteSpace(request.Ma) || string.IsNullOrWhiteSpace(request.Ten) || string.IsNullOrWhiteSpace(request.Loai))
         return "Vui lòng nhập Mã, Tên và Loại thiết bị";
-    if (request.Loai is not ("laptop" or "tablet" or "pda" or "monitor" or "phone"))
+    if (request.Loai is not ("laptop" or "tablet" or "pda" or "monitor" or "phone" or "printer"))
         return "Loại thiết bị không hợp lệ";
     var tooLong = new (string Label, string? Value, int Max)[]
     {
@@ -727,25 +727,28 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
     var actorName = await db.Users.AsNoTracking().Where(x => x.Id == userId).Select(x => x.FullName).SingleOrDefaultAsync(ct) ?? "?";
     job.Report("lists");
 
-    // 4 danh sách hỏi song song. Máy tính là bắt buộc; điện thoại/tablet/màn hình lỗi (vd. sai đường dẫn) chỉ báo riêng loại đó,
-    // không làm hỏng phần đã lấy được.
+    // 5 danh sách hỏi song song. Máy tính là bắt buộc; điện thoại/tablet/màn hình/máy in lỗi (vd. sai đường dẫn) chỉ
+    // báo riêng loại đó, không làm hỏng phần đã lấy được.
     var computersTask = TryFetchAsync(() => glpi.GetComputersAsync(ct), ct);
     var phonesTask = TryFetchAsync(() => glpi.GetPhonesAsync(ct), ct);
     var tabletsTask = TryFetchAsync(() => glpi.GetTabletsAsync(ct), ct);
     var monitorsTask = TryFetchAsync(() => glpi.GetMonitorsAsync(ct), ct);
-    // Chờ đủ cả 4 trước khi xét lỗi máy tính: nếu return sớm ngay khi computersTask lỗi, 3 request còn lại vẫn
+    var printersTask = TryFetchAsync(() => glpi.GetPrintersAsync(ct), ct);
+    // Chờ đủ cả 5 trước khi xét lỗi máy tính: nếu return sớm ngay khi computersTask lỗi, các request còn lại vẫn
     // chạy ngầm không ai chờ/huỷ, chiếm connection pool tới khi tự timeout dù job đã báo "thất bại" cho người dùng.
-    await Task.WhenAll(computersTask, phonesTask, tabletsTask, monitorsTask);
+    await Task.WhenAll(computersTask, phonesTask, tabletsTask, monitorsTask, printersTask);
     var (computers, computerError) = computersTask.Result;
     if (computerError is not null) { job.Fail(computerError); return; }
     var (phones, phoneError) = phonesTask.Result;
     var (tablets, tabletError) = tabletsTask.Result;
     var (monitors, monitorError) = monitorsTask.Result;
+    var (printers, printerError) = printersTask.Result;
 
     var assets = computers.Select(c => (Asset: c, Loai: "laptop", Kho: "24"))
         .Concat(phones.Select(p => (Asset: p, Loai: "phone", Kho: "12")))
         .Concat(tablets.Select(t => (Asset: t, Loai: "tablet", Kho: "24")))
         .Concat(monitors.Select(m => (Asset: m, Loai: "monitor", Kho: "24")))
+        .Concat(printers.Select(p => (Asset: p, Loai: "printer", Kho: "24")))
         .ToList();
 
     // Chi tiết từng máy tính (CPU/RAM/ổ cứng/IP/Windows/Office) và SIM điện thoại: mỗi máy phải hỏi riêng nên chạy song song có giới hạn.
@@ -843,7 +846,7 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
     job.Report("saving");
     await db.SaveChangesAsync(CancellationToken.None);
 
-    job.Complete(new { ok = true, total = assets.Count, computers = computers.Count, phones = phones.Count, phone_error = phoneError, tablets = tablets.Count, tablet_error = tabletError, monitors = monitors.Count, monitor_error = monitorError, created, updated, unchanged, skipped, skipped_names = skippedNames, duplicates, detailed, detail_warnings = detailReport.Warnings });
+    job.Complete(new { ok = true, total = assets.Count, computers = computers.Count, phones = phones.Count, phone_error = phoneError, tablets = tablets.Count, tablet_error = tabletError, monitors = monitors.Count, monitor_error = monitorError, printers = printers.Count, printer_error = printerError, created, updated, unchanged, skipped, skipped_names = skippedNames, duplicates, detailed, detail_warnings = detailReport.Warnings });
 }
 static IResult GlpiNotConfigured() => Results.BadRequest(new { error = "Chưa cấu hình kết nối GLPI. Thêm mục \"Glpi\" (BaseUrl, ClientId, ClientSecret, Username, Password) vào appsettings.Development.json." });
 // Chạy 1 lần kiểm tra GLPI cho admin: báo chưa cấu hình / lỗi kết nối bằng thông báo rõ ràng thay vì lỗi 500.

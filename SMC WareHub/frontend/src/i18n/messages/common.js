@@ -66,6 +66,7 @@ export const common = {
   'loai.pda': ['PDA', 'PDA'],
   'loai.monitor': ['Màn hình', 'Monitor'],
   'loai.phone': ['Điện thoại', 'Phone'],
+  'loai.printer': ['Máy in', 'Printer'],
   'kho.12': ['Điện thoại', 'Phone'],
   'kho.24': ['Laptop / Tablet / PDA / Màn hình', 'Laptop / Tablet / PDA / Monitor'],
 
