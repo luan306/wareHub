@@ -108,25 +108,26 @@ public static class GlpiParsers
         return text;
     }
 
-    // Ổ cứng: ưu tiên tên model do GLPI đặt (vd. "SSD 250 GB"); không có tên thì dùng dung lượng.
+    // Ổ cứng: ưu tiên tên model do GLPI đặt (vd. "SSD 250 GB"); không có tên thì dùng dung lượng. Khoá lồng nhau thật
+    // của GLPI là "hard_drive" (có gạch dưới, không phải "harddrive"); "capacity" ở đây tính theo GB trực tiếp (vd.
+    // capacity=256 cho ổ "SSD 250 GB"), khác với "size" của RAM vốn tính theo MiB — không chia lại cho 1024.
     public static string? Storage(JsonElement? body)
     {
         var parts = new List<string>();
         foreach (var item in Items(body))
         {
-            var name = NameOf(item, "harddrive", "deviceharddrive", "device");
-            var capacityMib = NumberOf(item, "capacity", "size");
+            var name = NameOf(item, "hard_drive", "harddrive", "deviceharddrive", "device");
+            var capacityGb = NumberOf(item, "capacity", "size");
             if (name is not null && Regex.IsMatch(name, @"\d\s*(GB|TB|G|T)\b", RegexOptions.IgnoreCase)) parts.Add(Regex.Replace(name, @"(\d)\s+(GB|TB)", "$1$2", RegexOptions.IgnoreCase));
-            else if (capacityMib is > 0) parts.Add(FormatStorage(capacityMib.Value, name));
+            else if (capacityGb is > 0) parts.Add(FormatStorage(capacityGb.Value, name));
             else if (name is not null) parts.Add(name);
         }
         var distinct = parts.Distinct().ToList();
         return distinct.Count == 0 ? null : string.Join(" + ", distinct);
     }
 
-    private static string FormatStorage(double mib, string? name)
+    private static string FormatStorage(double gb, string? name)
     {
-        var gb = mib / 1024d;
         var size = gb >= 1000 ? $"{Round(gb / 1024d)}TB" : $"{Round(gb)}GB";
         return string.IsNullOrWhiteSpace(name) ? size : $"{name} {size}";
     }

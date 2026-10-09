@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { HandoverModal, HandoverSheet, AttachmentSheet, buildHandoverData } from '../components/HandoverSheet';
+import { HandoverModal, HandoverSheet, AttachmentSheet, buildHandoverData, NewHandoverPicker } from '../components/HandoverSheet';
 import { Pager } from '../components/Pager';
 import { useT } from '../i18n';
 import { useReconnect } from '../context/ConnectionContext';
@@ -28,6 +28,8 @@ export function Handovers() {
   const [selected, setSelected] = useState(() => new Map());
   const [openItem, setOpenItem] = useState(null);
   const [printItems, setPrintItems] = useState(null);
+  const [newDevicePickerOpen, setNewDevicePickerOpen] = useState(false);
+  const [newHandoverDevice, setNewHandoverDevice] = useState(null);
   const requestVersion = useRef(0);
 
   const fetchItems = useCallback(async () => {
@@ -95,6 +97,7 @@ export function Handovers() {
       <div className="page-head manage-head">
         <h2>{t('hvp.title')}</h2>
         <div className="manage-actions">
+          <button className="btn-secondary" type="button" onClick={() => setNewDevicePickerOpen(true)}>{t('hvp.newSlip')}</button>
           <button className="btn-primary" type="button" onClick={printSelected} disabled={selected.size === 0}>
             {selected.size > 0 ? t('hvp.printSelected', { count: selected.size }) : t('hvp.printSelectedNone')}
           </button>
@@ -169,6 +172,16 @@ export function Handovers() {
 
       {openItem && (
         <HandoverModal key={openItem.id} saved={openItem} onClose={() => { setOpenItem(null); fetchItems(); }} />
+      )}
+
+      {newDevicePickerOpen && (
+        <NewHandoverPicker
+          onPick={(device) => { setNewDevicePickerOpen(false); setNewHandoverDevice(device); }}
+          onCancel={() => setNewDevicePickerOpen(false)}
+        />
+      )}
+      {newHandoverDevice && (
+        <HandoverModal key={`new-${newHandoverDevice.id}`} device={newHandoverDevice} onClose={() => { setNewHandoverDevice(null); fetchItems(); }} />
       )}
 
       {printItems && createPortal(

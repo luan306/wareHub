@@ -202,19 +202,6 @@ app.MapGet("/api/ready", async (WareHubDbContext db, CancellationToken cancellat
         ? Results.Ok(new { ready = true, version = buildId })
         : Results.Json(new { ready = false, version = buildId }, statusCode: StatusCodes.Status503ServiceUnavailable));
 // TẠM THỜI — chẩn đoán vụ IP luôn ra 127.0.0.1 khi vào qua domain/IIS, và vụ đăng nhập qua domain báo sai mật khẩu.
-// Xoá cả 2 endpoint debug này sau khi xong việc (POST echo lại y nguyên những gì backend nhận được, kể cả mật khẩu — chỉ
-// dùng tạm để chẩn đoán, không được để lại trên bản chạy thật).
-app.MapGet("/api/_debug/headers", (HttpContext context) => Results.Ok(new
-{
-    remote_ip = context.Connection.RemoteIpAddress?.ToString(),
-    headers = context.Request.Headers.ToDictionary(h => h.Key, h => h.Value.ToString()),
-}));
-app.MapPost("/api/_debug/echo", async (HttpContext context) =>
-{
-    using var reader = new StreamReader(context.Request.Body);
-    var body = await reader.ReadToEndAsync();
-    return Results.Ok(new { content_type = context.Request.ContentType, content_length = context.Request.ContentLength, raw_body = body, raw_body_length = body.Length });
-});
 app.MapGet("/api/maintenance", () => Results.Ok(maintenance.Current));
 app.MapPut("/api/maintenance", (MaintenanceRequest request) =>
 {
@@ -387,13 +374,17 @@ devices.MapPost("/glpi-sync", (HttpContext context, GlpiClient glpi, GlpiSyncJob
         : Results.Conflict(new { error = "Đang có một lần đồng bộ GLPI chạy, vui lòng chờ nó xong." });
 }).RequireAuthorization("admin");
 devices.MapGet("/glpi-sync/status", (GlpiSyncJob job) => Results.Ok(job.Snapshot())).RequireAuthorization("admin");
-devices.MapPost("/{id:int}/clone", async (int id, CloneRequest request, WareHubDbContext db) =>
+// Form Clone trên giao diện dùng chung với Thêm/Sửa nên người dùng sửa được mọi trường trước khi lưu — nhận
+// DeviceRequest (giống Thêm mới) thay vì chỉ lấy Ma, để những trường đã sửa tay thật sự được lưu lại, không bị
+// âm thầm bỏ qua rồi máy mới lại y hệt máy gốc (trừ mã).
+devices.MapPost("/{id:int}/clone", async (int id, DeviceRequest request, WareHubDbContext db) =>
 {
-    if (string.IsNullOrWhiteSpace(request.Ma)) return Results.BadRequest(new { error = "Vui lòng nhập mã thiết bị mới" });
-    var source = await db.Devices.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id);
-    if (source is null) return Results.NotFound(new { error = "Không tìm thấy thiết bị gốc" });
-    var clone = new Device { Ma = request.Ma.Trim(), Ten = source.Ten, Loai = source.Loai, Kho = source.Kho, Model = source.Model, Cpu = source.Cpu, Ram = source.Ram, Storage = source.Storage, IsActive = true, LifecycleStatus = "old", UserName = source.UserName, RegisteredAt = source.RegisteredAt, PhongBan = source.PhongBan, GhiChu = source.GhiChu, Producer = source.Producer, IpAddress = source.IpAddress, OsName = source.OsName, OfficeName = source.OfficeName, PhoneNumber = source.PhoneNumber, SimSerial = source.SimSerial };
-    db.Devices.Add(clone); try { await db.SaveChangesAsync(); return Results.Created($"/api/devices/{clone.Id}", new { id = clone.Id }); } catch (DbUpdateException) { return Results.Conflict(new { error = $"Mã thiết bị \"{request.Ma}\" đã tồn tại" }); }
+    var validation = ValidateDevice(request); if (validation is not null) return Results.BadRequest(new { error = validation });
+    if (!await db.Devices.AnyAsync(x => x.Id == id)) return Results.NotFound(new { error = "Không tìm thấy thiết bị gốc" });
+    var clone = ToDevice(request);
+    db.Devices.Add(clone);
+    try { await db.SaveChangesAsync(); return Results.Created($"/api/devices/{clone.Id}", new { id = clone.Id }); }
+    catch (DbUpdateException) { return Results.Conflict(new { error = $"Mã thiết bị \"{request.Ma}\" đã tồn tại" }); }
 }).RequireAuthorization("admin");
 devices.MapDelete("/{id:int}", async (int id, WareHubDbContext db) =>
 {

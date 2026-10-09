@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { api } from '../api/client';
 import { printHandoverSheets } from '../utils/printPageSize';
-import { LOAI_LABELS } from '../utils/deviceTypes';
+import { LOAI_LABELS, LOAI_LABELS_EN } from '../utils/deviceTypes';
 import { useT } from '../i18n';
 import smcLogo from '../img/Logo_SMC_Corporation.svg';
 
@@ -50,6 +50,8 @@ export function buildHandoverData(device) {
     transfer_date: isoToday(),
     computer_name: device.ten || '',
     service_tag: device.ma || '',
+    // Loại của máy chính — dùng để liệt kê lại máy chính trong bảng đính kèm (xem attachmentRows bên dưới).
+    main_loai: device.loai || '',
     storage: device.storage || '',
     ram: device.ram || '',
     cpu: device.cpu || '',
@@ -69,12 +71,13 @@ export function buildHandoverData(device) {
   };
 }
 
-// Phiếu điện thoại cấp nhiều máy: ô IME/SN chỉ ghi "refer the attached file (N ea)", số lượng gồm cả máy chính
-// (danh sách đính kèm của phiếu điện thoại cũng liệt kê máy chính ở dòng đầu để khớp N).
-function phoneAttachmentRows(data) {
+// Phiếu cấp nhiều máy (gộp từ trang Thiết bị): danh sách đính kèm liệt kê luôn máy chính ở dòng đầu, không chỉ các máy
+// còn lại — để số lượng (vd ô IME/SN "refer the attached file (N ea)" của phiếu điện thoại) khớp đúng N, và người nhận
+// nhìn 1 bảng là biết đủ hết các máy, không cần tìm riêng máy chính ở phiếu trước.
+function attachmentRows(data) {
   const extra = data.attachments || [];
-  if (data.kind !== 'phone' || extra.length === 0) return extra;
-  return [{ id: 'main', ten: data.computer_name, ma: data.service_tag, loai: 'phone', model: data.model }, ...extra];
+  if (extra.length === 0) return extra;
+  return [{ id: 'main', ten: data.computer_name, ma: data.service_tag, loai: data.main_loai || (data.kind === 'phone' ? 'phone' : 'laptop'), model: data.model }, ...extra];
 }
 
 function Label({ en, vi }) {
@@ -129,7 +132,7 @@ export function HandoverSheet({ data }) {
           <colgroup><col style={{ width: '43%' }} /><col style={{ width: '57%' }} /></colgroup>
           <tbody>
             <tr><th>MODEL</th><td className="hv-center">{data.model}</td></tr>
-            <tr><th>IME/SN</th><td className="hv-center">{(data.attachments || []).length > 0 ? `refer the attached file (${phoneAttachmentRows(data).length} ea)` : data.service_tag}</td></tr>
+            <tr><th>IME/SN</th><td className="hv-center">{(data.attachments || []).length > 0 ? `refer the attached file (${attachmentRows(data).length} ea)` : data.service_tag}</td></tr>
             <tr><th>MOBILE PHONE NUMBER</th><td className="hv-center">{data.phone_number}</td></tr>
             <tr><th>ADAPTER</th><td className="hv-center">{data.adapter}</td></tr>
             <tr><th>OTHER DEVICES</th><td className="hv-center">{data.other}</td></tr>
@@ -222,7 +225,7 @@ export function HandoverSheet({ data }) {
 // Trang kèm theo phiếu chính khi 1 người nhận nhiều thiết bị — cùng khổ A4, cùng phong cách (logo,
 // tiêu đề song ngữ, bảng viền đen) để in nối liền sau phiếu chính, không phải file rời.
 export function AttachmentSheet({ data }) {
-  const attachments = phoneAttachmentRows(data);
+  const attachments = attachmentRows(data);
   return (
     <div className="hv-sheet hv-attach-sheet">
       <div className="hv-head">
@@ -244,7 +247,7 @@ export function AttachmentSheet({ data }) {
         </colgroup>
         <thead>
           <tr>
-            <th>#</th><th>Device Name</th><th>Serial Number</th><th>Loại</th><th>Model</th>
+            <th>#</th><th>Device Name</th><th>Serial Number</th><th>Type</th><th>Model</th>
           </tr>
         </thead>
         <tbody>
@@ -253,7 +256,7 @@ export function AttachmentSheet({ data }) {
               <td className="hv-center">{index + 1}</td>
               <td className="hv-center">{item.ten || '—'}</td>
               <td className="hv-center mono">{item.ma}</td>
-              <td className="hv-center">{LOAI_LABELS[item.loai] || item.loai}</td>
+              <td className="hv-center">{LOAI_LABELS_EN[item.loai] || item.loai}</td>
               <td className="hv-center">{item.model || '—'}</td>
             </tr>
           ))}
@@ -499,6 +502,35 @@ function AttachmentPicker({ excludeIds, onPick, onCancel }) {
   );
 }
 
+// Tạo phiếu mới thẳng từ trang Phiếu bàn giao (không cần qua trang Thiết bị trước) — chọn 1 thiết bị bất kỳ để làm
+// thiết bị chính, HandoverModal mở ra với device này giống hệt như bấm "Phiếu BG" từ trang Thiết bị.
+export function NewHandoverPicker({ onPick, onCancel }) {
+  const { t } = useT();
+  const picker = usePickerSearch('', (search) => (
+    api.get('/devices', { search, page: 1, pageSize: 20 }).then((result) => result.devices)
+  ));
+  return (
+    <PickerDialog
+      title={t('hv.pick.newTitle')}
+      help={t('hv.pick.newHelp')}
+      placeholder={t('hv.pick.newPlaceholder')}
+      emptyText={t('hv.pick.newEmpty')}
+      picker={picker}
+      onCancel={onCancel}
+      renderRow={(item) => (
+        <PickerRow
+          key={item.id}
+          no={item.ma}
+          title={item.model || item.ten || '—'}
+          subtitle={[LOAI_LABELS[item.loai] && t(`loai.${item.loai}`), item.producer].filter(Boolean).join(' · ') || t('hv.pick.noInfo')}
+          who={item.user_name || item.phong_ban || ''}
+          onClick={() => onPick(item)}
+        />
+      )}
+    />
+  );
+}
+
 // extraAttachments: chọn nhiều thiết bị cùng lúc ở trang Thiết bị rồi gộp vào 1 phiếu (1 người nhận nhiều máy) —
 // thiết bị đầu tiên làm máy chính, các thiết bị còn lại đẩy thẳng vào danh sách đính kèm ngay khi mở phiếu, không
 // cần mở lại phiếu đã lưu rồi bấm "Thêm thiết bị" từng cái một như trước.
@@ -664,7 +696,7 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
 
   // Điền nhanh "Case for <model> (N ea)" cho phiếu điện thoại; N gồm cả máy chính khi có đính kèm. Vẫn sửa tay được.
   function handleCaseFill() {
-    const count = phoneAttachmentRows(data).length || 1;
+    const count = attachmentRows(data).length || 1;
     const text = `Case for ${data.model || '...'}${count > 1 ? ` (${count}ea)` : ''}`;
     setData((current) => ({ ...current, other: text }));
     setNotice(t('hv.caseFilled'));

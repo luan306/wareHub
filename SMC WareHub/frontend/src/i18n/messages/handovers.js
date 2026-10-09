@@ -26,6 +26,7 @@ export const handovers = {
     'Chưa có phiếu bàn giao nào. Vào trang Thiết bị, bấm "Phiếu BG" ở một thiết bị để tạo phiếu.',
     'No handover slips yet. Go to the Devices page and click "Slip" on a device to create one.',
   ],
+  'hvp.newSlip': ['+ Tạo phiếu mới', '+ New handover'],
 
   'hv.title': ['Phiếu bàn giao thiết bị', 'Equipment handover slip'],
   'hv.group.slip': ['Thông tin phiếu', 'Slip information'],
@@ -87,4 +88,8 @@ export const handovers = {
   ],
   'hv.pick.attachPlaceholder': ['Tìm theo serial, tên, model...', 'Search by serial, name, model...'],
   'hv.pick.attachEmpty': ['Không có thiết bị nào khớp.', 'No devices match.'],
+  'hv.pick.newTitle': ['Chọn thiết bị để tạo phiếu', 'Pick a device to start a slip'],
+  'hv.pick.newHelp': ['Tìm thiết bị theo serial, tên, model — chọn 1 thiết bị để bắt đầu lập phiếu bàn giao mới.', 'Search by serial, name, model — pick a device to start a new handover slip.'],
+  'hv.pick.newPlaceholder': ['Tìm theo serial, tên, model...', 'Search by serial, name, model...'],
+  'hv.pick.newEmpty': ['Không có thiết bị nào khớp.', 'No devices match.'],
 };

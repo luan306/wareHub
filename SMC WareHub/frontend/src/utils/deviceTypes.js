@@ -8,3 +8,14 @@ export const LOAI_LABELS = {
   phone: 'Điện thoại',
   printer: 'Máy in',
 };
+
+// Tên tiếng Anh — phiếu bàn giao (ATTACHED EQUIPMENT LIST) in toàn tiếng Anh, không dùng LOAI_LABELS (tiếng Việt) ở đây.
+export const LOAI_LABELS_EN = {
+  laptop: 'Laptop',
+  desktop: 'Desktop',
+  tablet: 'Tablet',
+  pda: 'PDA',
+  monitor: 'Monitor',
+  phone: 'Phone',
+  printer: 'Printer',
+};
