@@ -80,11 +80,12 @@ function attachmentRows(data) {
   return [{ id: 'main', ten: data.computer_name, ma: data.service_tag, loai: data.main_loai || (data.kind === 'phone' ? 'phone' : 'laptop'), model: data.model }, ...extra];
 }
 
-// Ô số serial của phiếu chính: có từ 2 thiết bị trở lên (gộp từ trang Thiết bị) thì ghi "refer the attached file (N ea)"
-// thay vì chỉ 1 serial của máy chính — áp dụng cho cả phiếu máy tính lẫn điện thoại, không chỉ riêng điện thoại.
-function serviceTagDisplay(data) {
+// Ô Computer Name / Service Tag của phiếu chính: có từ 2 thiết bị trở lên (gộp từ trang Thiết bị) thì ghi
+// "refer the attached file (N ea)" thay vì chỉ tên/serial của riêng máy chính — áp dụng cho cả phiếu máy tính lẫn
+// điện thoại, không chỉ riêng điện thoại; singleValue là giá trị hiện khi chỉ có đúng 1 thiết bị (mặc định service_tag).
+function serviceTagDisplay(data, singleValue = data.service_tag) {
   const rows = attachmentRows(data);
-  return rows.length > 1 ? `refer the attached file (${rows.length} ea)` : data.service_tag;
+  return rows.length > 1 ? `refer the attached file (${rows.length} ea)` : singleValue;
 }
 
 function Label({ en, vi }) {
@@ -149,7 +150,7 @@ export function HandoverSheet({ data }) {
       <table className="hv-details">
         <colgroup><col style={{ width: '30%' }} /><col style={{ width: '20%' }} /><col style={{ width: '50%' }} /></colgroup>
         <tbody>
-          <tr><th>COMPUTER NAME</th><td colSpan="2" className="hv-center">{data.computer_name}</td></tr>
+          <tr><th>COMPUTER NAME</th><td colSpan="2" className="hv-center">{serviceTagDisplay(data, data.computer_name)}</td></tr>
           <tr><th>SERVICE TAG</th><td colSpan="2" className="hv-center">{serviceTagDisplay(data)}</td></tr>
           <tr><th>HDD/SSD</th><td colSpan="2" className="hv-center">{data.storage}</td></tr>
           <tr><th>RAM</th><td colSpan="2" className="hv-center">{data.ram}</td></tr>
@@ -229,47 +230,60 @@ export function HandoverSheet({ data }) {
   );
 }
 
-// Trang kèm theo phiếu chính khi 1 người nhận nhiều thiết bị — cùng khổ A4, cùng phong cách (logo,
-// tiêu đề song ngữ, bảng viền đen) để in nối liền sau phiếu chính, không phải file rời.
+// 1 trang A4 (284mm cao, lề 8mm, đầu trang ~45mm) chứa được khoảng chừng này dòng bảng (dòng ~7.5mm/dòng tính theo
+// cỡ chữ 9pt + đệm trong .hv-attach-table) — chừa dư an toàn, không tính sát để lỡ font trình duyệt khác nhau
+// chút cũng không bị tràn dòng cuối ra ngoài trang.
+const ATTACH_ROWS_PER_PAGE = 34;
+
+// Trang kèm theo phiếu chính khi 1 người nhận nhiều thiết bị — cùng khổ A4, cùng phong cách (logo, tiêu đề song
+// ngữ, bảng viền đen) để in nối liền sau phiếu chính. Nhiều thiết bị (vd 25-50+) thì tự chia thành NHIỀU trang rõ
+// ràng (mỗi trang lặp lại đầu đề + tiêu đề cột) thay vì 1 bảng dài lê thê — vừa đúng với số dòng thật sự in vừa 1
+// trang giấy, vừa để bản xem trước ngay trong khung soạn phiếu trông gọn gàng như tài liệu nhiều trang thật.
 export function AttachmentSheet({ data }) {
   const attachments = attachmentRows(data);
+  const pageCount = Math.max(1, Math.ceil(attachments.length / ATTACH_ROWS_PER_PAGE));
+  const pages = Array.from({ length: pageCount }, (_, p) => attachments.slice(p * ATTACH_ROWS_PER_PAGE, (p + 1) * ATTACH_ROWS_PER_PAGE));
   return (
-    <div className="hv-sheet hv-attach-sheet">
-      <div className="hv-head">
-        <img src={smcLogo} alt="SMC" />
-        <div className="hv-title">
-          <h1>ATTACHED EQUIPMENT LIST</h1>
-          <p>DANH SÁCH THIẾT BỊ ĐÍNH KÈM</p>
+    <>
+      {pages.map((rows, pageIndex) => (
+        <div className="hv-sheet hv-attach-sheet" key={pageIndex}>
+          <div className="hv-head">
+            <img src={smcLogo} alt="SMC" />
+            <div className="hv-title">
+              <h1>ATTACHED EQUIPMENT LIST</h1>
+              <p>DANH SÁCH THIẾT BỊ ĐÍNH KÈM</p>
+            </div>
+            <div className="hv-formno">No.: {data.no}{pageCount > 1 ? ` — page ${pageIndex + 1}/${pageCount}` : ''}</div>
+          </div>
+          <div className="hv-reg">
+            <span>Full name <i className="hv-vi-inline">(Họ tên)</i>: {data.full_name}</span>
+            <span className="hv-no">Ngày: <b>{formatDayMonthYear(data.register_date)}</b></span>
+          </div>
+          <table className="hv-attach-table">
+            <colgroup>
+              <col style={{ width: '8%' }} /><col style={{ width: '24%' }} /><col style={{ width: '25%' }} />
+              <col style={{ width: '20%' }} /><col style={{ width: '23%' }} />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>#</th><th>Device Name</th><th>Serial Number</th><th>Type</th><th>Model</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((item, index) => (
+                <tr key={item.id}>
+                  <td className="hv-center">{pageIndex * ATTACH_ROWS_PER_PAGE + index + 1}</td>
+                  <td className="hv-center">{item.ten || '—'}</td>
+                  <td className="hv-center mono">{item.ma}</td>
+                  <td className="hv-center">{LOAI_LABELS_EN[item.loai] || item.loai}</td>
+                  <td className="hv-center">{item.model || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        <div className="hv-formno">No.: {data.no}</div>
-      </div>
-      <div className="hv-reg">
-        <span>Full name <i className="hv-vi-inline">(Họ tên)</i>: {data.full_name}</span>
-        <span className="hv-no">Ngày: <b>{formatDayMonthYear(data.register_date)}</b></span>
-      </div>
-      <table className="hv-attach-table">
-        <colgroup>
-          <col style={{ width: '8%' }} /><col style={{ width: '24%' }} /><col style={{ width: '25%' }} />
-          <col style={{ width: '20%' }} /><col style={{ width: '23%' }} />
-        </colgroup>
-        <thead>
-          <tr>
-            <th>#</th><th>Device Name</th><th>Serial Number</th><th>Type</th><th>Model</th>
-          </tr>
-        </thead>
-        <tbody>
-          {attachments.map((item, index) => (
-            <tr key={item.id}>
-              <td className="hv-center">{index + 1}</td>
-              <td className="hv-center">{item.ten || '—'}</td>
-              <td className="hv-center mono">{item.ma}</td>
-              <td className="hv-center">{LOAI_LABELS_EN[item.loai] || item.loai}</td>
-              <td className="hv-center">{item.model || '—'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+      ))}
+    </>
   );
 }
 
