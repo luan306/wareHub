@@ -845,6 +845,12 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
      chọn Margins = Default hay None. Cao 284mm (nội dung 268mm) thay vì 297mm để chừa dư ~13mm phòng khi trình duyệt/driver
      bớt phần in được, tránh tràn thêm 1 trang gần như trắng. */
   body.printing-handover .handover-print-root .hv-sheet { zoom: 1; box-shadow: none; box-sizing: border-box; width: 210mm; height: 284mm; min-height: 0; padding: 8mm; margin: 0 auto; }
+  /* Bảng đính kèm (gộp nhiều thiết bị) dài ngắn tuỳ số lượng máy — không ép đúng 1 trang như phiếu chính (nội dung cố
+     định), để GLPI nhiều máy (vd 25+) tự chảy tiếp sang trang sau thay vì bị cắt/tràn ra ngoài khung 284mm. */
+  body.printing-handover .handover-print-root .hv-attach-sheet { height: auto; min-height: 284mm; }
+  body.printing-handover .handover-print-root .hv-attach-table { break-inside: auto; }
+  body.printing-handover .handover-print-root .hv-attach-table thead { display: table-header-group; }
+  body.printing-handover .handover-print-root .hv-attach-table tr { break-inside: avoid; }
 }
 /* Ô này giờ gõ tay được (trước chỉ hiện số tự cấp, readOnly) — bỏ màu nền/chữ kiểu "chỉ xem" để không gây hiểu lầm. */
 .hv-no-field input { font-weight: 700; letter-spacing: .5px; }

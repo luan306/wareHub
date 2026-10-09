@@ -80,6 +80,13 @@ function attachmentRows(data) {
   return [{ id: 'main', ten: data.computer_name, ma: data.service_tag, loai: data.main_loai || (data.kind === 'phone' ? 'phone' : 'laptop'), model: data.model }, ...extra];
 }
 
+// Ô số serial của phiếu chính: có từ 2 thiết bị trở lên (gộp từ trang Thiết bị) thì ghi "refer the attached file (N ea)"
+// thay vì chỉ 1 serial của máy chính — áp dụng cho cả phiếu máy tính lẫn điện thoại, không chỉ riêng điện thoại.
+function serviceTagDisplay(data) {
+  const rows = attachmentRows(data);
+  return rows.length > 1 ? `refer the attached file (${rows.length} ea)` : data.service_tag;
+}
+
 function Label({ en, vi }) {
   return (
     <>
@@ -132,7 +139,7 @@ export function HandoverSheet({ data }) {
           <colgroup><col style={{ width: '43%' }} /><col style={{ width: '57%' }} /></colgroup>
           <tbody>
             <tr><th>MODEL</th><td className="hv-center">{data.model}</td></tr>
-            <tr><th>IME/SN</th><td className="hv-center">{(data.attachments || []).length > 0 ? `refer the attached file (${attachmentRows(data).length} ea)` : data.service_tag}</td></tr>
+            <tr><th>IME/SN</th><td className="hv-center">{serviceTagDisplay(data)}</td></tr>
             <tr><th>MOBILE PHONE NUMBER</th><td className="hv-center">{data.phone_number}</td></tr>
             <tr><th>ADAPTER</th><td className="hv-center">{data.adapter}</td></tr>
             <tr><th>OTHER DEVICES</th><td className="hv-center">{data.other}</td></tr>
@@ -143,7 +150,7 @@ export function HandoverSheet({ data }) {
         <colgroup><col style={{ width: '30%' }} /><col style={{ width: '20%' }} /><col style={{ width: '50%' }} /></colgroup>
         <tbody>
           <tr><th>COMPUTER NAME</th><td colSpan="2" className="hv-center">{data.computer_name}</td></tr>
-          <tr><th>SERVICE TAG</th><td colSpan="2" className="hv-center">{data.service_tag}</td></tr>
+          <tr><th>SERVICE TAG</th><td colSpan="2" className="hv-center">{serviceTagDisplay(data)}</td></tr>
           <tr><th>HDD/SSD</th><td colSpan="2" className="hv-center">{data.storage}</td></tr>
           <tr><th>RAM</th><td colSpan="2" className="hv-center">{data.ram}</td></tr>
           <tr><th>CPU</th><td colSpan="2" className="hv-center">{data.cpu}</td></tr>

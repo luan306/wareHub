@@ -557,12 +557,6 @@ export function Devices() {
     else doCreateBulkHandovers(action.devices);
   }
 
-  function openCreateModal() {
-    setForm(emptyForm);
-    setFormError('');
-    setModalOpen(true);
-  }
-
   function openEditModal(device) {
     setForm({ id: device.id, original_ma: device.ma, ...deviceToFormFields(device) });
     setFormError('');
@@ -646,7 +640,6 @@ export function Devices() {
         <div className="manage-actions">
           <button className="btn-secondary" type="button" onClick={exportInventory} disabled={exporting}>{exporting ? t('dev.exporting') : t('dev.exportInventory')}</button>
           {isAdmin && <button className="btn-secondary" type="button" onClick={syncFromGlpi} disabled={syncingGlpi}>{syncingGlpi ? syncProgressLabel(syncProgress, t) : t('dev.syncGlpi')}</button>}
-          {isAdmin && <button className="btn-primary" type="button" onClick={openCreateModal}>{t('dev.addNew')}</button>}
           <button className="btn-secondary" type="button" onClick={createBulkHandovers} disabled={selected.size === 0 || bulkHandoverBusy}>
             {bulkHandoverBusy ? t('dev.creatingSlips') : `${t('dev.createSlips')}${selected.size > 0 ? ` (${selected.size})` : ''}`}
           </button>
