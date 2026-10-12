@@ -8,15 +8,11 @@ import { HandoverModal, HandoverSheet, buildHandoverData, mergeSpecs } from '../
 import { Pager } from '../components/Pager';
 import { setPrintPageSize, labelPageCss, printHandoverSheets, printWithBodyClass } from '../utils/printPageSize';
 import { LOAI_LABELS } from '../utils/deviceTypes';
+import { isoToday } from '../utils/date';
 import { useT, translateServerMessage } from '../i18n';
 import { useReconnect } from '../context/ConnectionContext';
 
-const emptyForm = { id: null, source_id: null, original_ma: '', ma: '', ten: '', loai: 'laptop', model: '', producer: '', ip_address: '', cpu: '', ram: '', storage: '', os_name: '', office_name: '', phone_number: '', sim_serial: '', is_active: false, user_name: '', registered_at: '', phong_ban: '', ghi_chu: '' };
-
-function isoToday() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
+const emptyForm = { id: null, source_id: null, original_ma: '', ma: '', ten: '', loai: 'laptop', model: '', producer: '', ip_address: '', cpu: '', ram: '', storage: '', os_name: '', office_name: '', phone_number: '', sim_serial: '', user_name: '', registered_at: '', phong_ban: '', ghi_chu: '' };
 
 // Cột của bảng thiết bị — bấm chuột phải vào tiêu đề bảng để tick ẩn/hiện từng cột.
 const COLUMN_DEFS = [
@@ -482,9 +478,11 @@ export function Devices() {
   }
 
   function doMergeSelectedIntoOneHandover(chosen) {
-    // Phiếu điện thoại/tablet có dãy số riêng với máy tính (xem backend HandoverKind) — nhóm nào có điện thoại/tablet
-    // thì phiếu PHẢI xếp vào nhóm đó, không phụ thuộc việc người dùng lỡ tick máy tính trước hay điện thoại trước.
-    const main = chosen.find((d) => d.loai === 'phone' || d.loai === 'tablet') || chosen[0];
+    // Máy chính là thiết bị được chọn ĐẦU TIÊN (đúng thứ tự bấm) — phiếu điện thoại/tablet và máy tính giờ dùng
+    // chung 1 khung in giống hệt nhau nên không còn cần ưu tiên loại nào lên trước; số phiếu vẫn tự tính đúng theo
+    // loại của máy chính (xem backend HandoverKind), chỉ khác ở chỗ máy chính giờ là máy chọn trước, không phải
+    // luôn ưu tiên điện thoại/tablet như trước.
+    const main = chosen[0];
     const rest = chosen.filter((d) => d.id !== main.id);
     setSelected(new Set());
     setSelectedDevices(new Map());

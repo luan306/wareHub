@@ -12,4 +12,5 @@ public sealed record LdapAddRequest(string? Username, string? FullName, string R
 public sealed record HandoverRequest(int? DeviceId, DateOnly? RegisterDate, string? FullName, JsonElement? Data = null, string? No = null);
 public sealed record HandoverUpdateRequest(string? FullName, JsonElement? Data = null, string? No = null);
 public sealed record PrintRequest([property: JsonPropertyName("deviceIds")] int[]? DeviceIds);
+public sealed record ApiKeyCreateRequest(string? Name, string[]? Scopes);
 

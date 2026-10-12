@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { connectionEvents } from '../api/connection';
+import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 import { useAuth } from './AuthContext';
 
 // Theo dõi kết nối tới máy chủ để giao diện báo đúng tình huống thay vì lỗi "Failed to fetch" khó hiểu:
@@ -17,16 +18,12 @@ const NOTICE_MS = 3500;
 export const RECONNECTED_EVENT = 'warehub:reconnected';
 
 async function fetchHealth() {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    const res = await fetch('/api/health', { cache: 'no-store', signal: controller.signal });
+    const res = await fetchWithTimeout('/api/health', { timeoutMs: 5000, cache: 'no-store' });
     if (!res.ok || !(res.headers.get('content-type') || '').includes('json')) return null;
     return await res.json();
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

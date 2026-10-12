@@ -799,7 +799,6 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
 .hv-details { flex: 0 0 auto; }
 .hv-details tr { height: 5.6mm; }
 .hv-details th, .hv-details td { padding-top: .4mm; padding-bottom: .4mm; }
-.hv-details-phone tr { height: 9mm; }
 .hv-sub { font-family: Arial, Helvetica, sans-serif; }
 .hv-policy th { font-size: 9pt; }
 .hv-policy td { padding: 1mm 1.6mm; font-size: 8.4pt; }
@@ -826,7 +825,9 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
 .hv-form fieldset { border: 1px solid var(--line); border-radius: var(--radius-sm); margin: 0 0 12px; padding: 4px 12px 10px; min-width: 0; }
 .hv-form legend { padding: 0 6px; font: 700 12px var(--font-body); color: var(--primary); }
 .hv-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
-.hv-fields label { display: block; margin: 8px 0 0; font-size: 11.5px; }
+/* min-width: 0 — mặc định 1 ô lưới không tự co nhỏ hơn nội dung gốc của nó; thiếu dòng này thì danh sách dài bên
+   trong (vd .hv-attach-list) đẩy tràn cả lưới ra ngoài, phải cuộn ngang mới xem hết (xem thêm .hv-attach-list li). */
+.hv-fields label { display: block; position: relative; min-width: 0; margin: 8px 0 0; font-size: 11.5px; }
 .hv-fields input { width: 100%; box-sizing: border-box; margin-top: 3px; }
 .hv-preview { background: #e9edf3; border-radius: var(--radius-sm); padding: 14px; display: flex; flex-direction: column; align-items: center; gap: 14px; }
 .hv-preview .hv-sheet { zoom: .72; box-shadow: 0 2px 14px rgba(0, 0, 0, .22); padding: 8mm; width: 210mm; min-height: 297mm; }
@@ -899,9 +900,11 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
 
 .hv-attach-help { margin: 0 0 8px; color: var(--ink-soft); font-size: 11.5px; line-height: 1.4; }
 .hv-attach-list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 5px; }
-.hv-attach-list li { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 12px; background: var(--panel-soft); }
-.hv-attach-list li span:first-child { font-weight: 700; color: var(--primary); }
-.hv-attach-list li span:nth-child(2) { flex: 1; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hv-attach-list li { display: flex; align-items: center; gap: 8px; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 12px; background: var(--panel-soft); }
+.hv-attach-list li span:first-child { flex: none; font-weight: 700; color: var(--primary); }
+/* min-width: 0 bắt buộc phải có — mặc định 1 phần tử flex không tự co nhỏ hơn nội dung gốc của nó dù đã "flex: 1",
+   thiếu dòng này thì overflow/text-overflow bên dưới vô tác dụng, chữ dài đẩy tràn cả khung form ra ngoài (phải cuộn ngang). */
+.hv-attach-list li span:nth-child(2) { flex: 1; min-width: 0; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hv-attach-list li button { border: 0; background: transparent; color: var(--danger); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; }
 
 /* Trang "Danh sách thiết bị đính kèm" — in ngay sau phiếu chính, cùng khổ A4/phong cách bảng viền đen. */
@@ -984,7 +987,6 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
   .hv-modal .modal-footer { padding: 12px 14px; }
   .hv-modal-body { padding: 12px; }
   .hv-fields { grid-template-columns: 1fr; }
-  .hv-fields > label, .hv-form fieldset { min-width: 0; }
   .hv-modal .hv-error, .hv-modal .hv-note { flex: 1 1 100%; order: -1; }
   .hv-preview { padding: 6px; }
   .hv-preview .hv-sheet { zoom: .38; }

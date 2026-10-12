@@ -44,6 +44,7 @@ export const handovers = {
   'hv.noPending': ['Số dự kiến, cấp chính thức khi bấm Lưu hoặc In phiếu.', 'Expected number; issued for real when you click Save or Print.'],
   'hv.noManual': ['Số tự nhập — để trống ô này để quay lại tự cấp.', 'Manually entered — clear this field to go back to auto-assign.'],
   'hv.monitorSerial': ['+ Serial màn hình', '+ Monitor serial'],
+  'hv.monitorPlaceholder': ['Bấm "+ Serial màn hình" ở trên để chọn', 'Click "+ Monitor serial" above to pick one'],
   'hv.caseByModel': ['+ Case theo model', '+ Case by model'],
   'hv.addDevice': ['+ Thêm thiết bị', '+ Add device'],
   'hv.attachHelp': [
@@ -61,7 +62,7 @@ export const handovers = {
   'hv.saved': ['Đã lưu phiếu {no}.', 'Saved slip {no}.'],
   'hv.autoFilled': ['Đã tự điền thông số từ phiếu cùng model ({no}).', 'Specs auto-filled from a slip with the same model ({no}).'],
   'hv.picked': ['Đã lấy thông số từ phiếu {no}. Bấm Lưu hoặc In phiếu để ghi lại.', 'Specs copied from slip {no}. Click Save or Print to store them.'],
-  'hv.monitorAdded': ['Đã thêm màn hình {code} vào Other devices.', 'Added monitor {code} to Other devices.'],
+  'hv.monitorAdded': ['Đã thêm màn hình {code} vào ô Monitor.', 'Added monitor {code} to the Monitor field.'],
   'hv.caseFilled': ['Đã điền Other devices — sửa lại nếu số lượng/loại case khác.', 'Other devices filled in — edit it if the quantity/type of case differs.'],
   'hv.attachAdded': ['Đã thêm {code} vào danh sách thiết bị đính kèm.', 'Added {code} to the attached devices list.'],
 

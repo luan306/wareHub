@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { HandoverModal, HandoverSheet, AttachmentSheet, buildHandoverData, NewHandoverPicker } from '../components/HandoverSheet';
+import { HandoverModal, HandoverSheet, AttachmentSheet, buildHandoverData, hasPrintedAttachments, NewHandoverPicker } from '../components/HandoverSheet';
 import { Pager } from '../components/Pager';
 import { useT } from '../i18n';
 import { useReconnect } from '../context/ConnectionContext';
@@ -191,7 +191,7 @@ export function Handovers() {
             return (
               <Fragment key={item.id}>
                 <HandoverSheet data={sheetData} />
-                {(sheetData.attachments || []).length > 0 && <AttachmentSheet data={sheetData} />}
+                {hasPrintedAttachments(sheetData) && <AttachmentSheet data={sheetData} />}
               </Fragment>
             );
           })}

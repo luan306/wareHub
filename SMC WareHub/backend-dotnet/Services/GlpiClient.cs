@@ -47,6 +47,10 @@ public sealed class GlpiAsset
 /// </summary>
 public sealed partial class GlpiClient(HttpClient http, IOptions<GlpiOptions> optionsAccessor, ILogger<GlpiClient> logger)
 {
+    // PropertyNamingPolicy khớp đúng quy ước snake_case chung của cả app (xem ConfigureHttpJsonOptions trong
+    // Program.cs) — không dùng chung được 1 JsonSerializerOptions với chỗ đó vì đây là options riêng để tự gọi
+    // JsonSerializer.Deserialize thủ công (không qua model binding của ASP.NET Core), và cần thêm
+    // PropertyNameCaseInsensitive=true riêng cho GLPI (các bản GLPI khác nhau viết hoa/thường tên trường không đều).
     private static readonly JsonSerializerOptions SnakeCaseJson = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,

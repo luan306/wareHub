@@ -3,6 +3,7 @@ import { createPortal, flushSync } from 'react-dom';
 import { api } from '../api/client';
 import { printHandoverSheets } from '../utils/printPageSize';
 import { LOAI_LABELS, LOAI_LABELS_EN } from '../utils/deviceTypes';
+import { isoToday } from '../utils/date';
 import { useT } from '../i18n';
 import smcLogo from '../img/Logo_SMC_Corporation.svg';
 
@@ -25,11 +26,6 @@ const RESPONSIBILITIES = [
 const PHONE_RESPONSIBILITIES = RESPONSIBILITIES.filter(
   (item) => typeof item !== 'string' || !/mustn't (change the hardware|install any software)/.test(item),
 );
-
-function isoToday() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 
 // 2022-09-06 -> 6/9/2022, giống định dạng trên mẫu phiếu giấy.
 function formatDayMonthYear(iso) {
@@ -58,11 +54,18 @@ export function buildHandoverData(device) {
     adapter: isPhone ? 'SAMSUNG Fast Charge Adapter' : 'Adapter Dell 65W',
     // Số điện thoại của SIM trong máy (lấy từ GLPI hoặc nhập tay); chưa có thì ghi N/A.
     phone_number: (isPhone && device.phone_number) || 'N/A',
-    // Lấy theo GLPI khi đã đồng bộ; chưa có thì dùng mặc định của công ty.
-    windows: device.os_name || 'Win 11 Professional',
-    office: device.office_name || 'Office 365',
-    ip: device.ip_address || '',
-    peripherals: 'Wire Mouse and Keyboard',
+    // Lấy theo GLPI khi đã đồng bộ; chưa có thì dùng mặc định của công ty. Điện thoại không có Windows/Office/chuột
+    // bàn phím nên mặc định "N/A" (khớp phiếu giấy) thay vì mặc định của máy tính — vẫn sửa tay được nếu cần.
+    windows: isPhone ? 'N/A' : device.os_name || 'Win 11 Professional',
+    office: isPhone ? 'N/A' : device.office_name || 'Office 365',
+    peripherals: isPhone ? 'N/A' : 'Wire Mouse and Keyboard',
+    // Màn hình rời đi kèm máy bàn — điền qua nút "Thêm màn hình theo Serial" (MonitorPicker), có dòng riêng trên
+    // phiếu (khớp mẫu phiếu giấy chính thức ITFGE-00459_19_A: Mouse/Keyboard, Monitor, Others là 3 dòng tách biệt
+    // trong "OTHER DEVICE", không gộp chung vào "Others" như trước). "monitor" là chuỗi hiện trong ô (sửa tay được);
+    // "monitors" là danh sách gốc (mỗi lần bấm "+ Serial màn hình" thêm 1 phần tử) — dùng để biết chính xác đã thêm
+    // bao nhiêu màn hình và để liệt kê chúng vào trang "ATTACHED EQUIPMENT LIST" (xem printedRows bên dưới).
+    monitor: '',
+    monitors: [],
     model: device.model || '',
     other: 'N/A',
     // Danh sách thiết bị đính kèm khi 1 người nhận nhiều thiết bị cùng lúc — in thành 1 trang riêng ngay sau
@@ -72,8 +75,9 @@ export function buildHandoverData(device) {
 }
 
 // Phiếu cấp nhiều máy (gộp từ trang Thiết bị): danh sách đính kèm liệt kê luôn máy chính ở dòng đầu, không chỉ các máy
-// còn lại — để số lượng (vd ô IME/SN "refer the attached file (N ea)" của phiếu điện thoại) khớp đúng N, và người nhận
-// nhìn 1 bảng là biết đủ hết các máy, không cần tìm riêng máy chính ở phiếu trước.
+// còn lại — để người nhận nhìn 1 bảng là biết đủ hết các máy, không cần tìm riêng máy chính ở phiếu trước. CHỈ tính
+// các máy gộp (data.attachments) — không tính màn hình (xem printedRows), vì "N ea" ở đây dùng để quyết định các ô
+// DEVICE NAME/SERIAL NUMBER/MODEL/PSU/LICENSE có hiện "refer to attached file" hay không, màn hình không liên quan.
 function attachmentRows(data) {
   const extra = data.attachments || [];
   if (extra.length === 0) return extra;
@@ -81,11 +85,39 @@ function attachmentRows(data) {
 }
 
 // Ô Computer Name / Service Tag của phiếu chính: có từ 2 thiết bị trở lên (gộp từ trang Thiết bị) thì ghi
-// "refer the attached file (N ea)" thay vì chỉ tên/serial của riêng máy chính — áp dụng cho cả phiếu máy tính lẫn
+// "Please refer to the attached file (N ea)" thay vì chỉ tên/serial của riêng máy chính — áp dụng cho cả phiếu máy tính lẫn
 // điện thoại, không chỉ riêng điện thoại; singleValue là giá trị hiện khi chỉ có đúng 1 thiết bị (mặc định service_tag).
 function serviceTagDisplay(data, singleValue = data.service_tag) {
   const rows = attachmentRows(data);
-  return rows.length > 1 ? `refer the attached file (${rows.length} ea)` : singleValue;
+  return rows.length > 1 ? `Please refer to the attached file (${rows.length} ea)` : singleValue;
+}
+
+// Ô Monitor: data.monitors là nguồn đúng (mỗi lần "+ Serial màn hình" thêm 1 phần tử); phiếu cũ đã lưu trước khi có
+// mảng này chỉ còn chuỗi data.monitor — đếm tạm theo dấu hiệu " (S/N: " trong chuỗi đó để không hiện sai cho phiếu cũ.
+function monitorDisplay(data) {
+  if (data.monitors?.length > 0) return data.monitors.length > 1 ? `Please refer to the attached file (${data.monitors.length} ea)` : data.monitors[0].label;
+  const raw = (data.monitor || '').trim();
+  if (!raw) return 'N/A';
+  const count = raw.match(/\(S\/N: /g)?.length || 1;
+  return count > 1 ? `Please refer to the attached file (${count} ea)` : raw;
+}
+
+// Bảng in ra trang "ATTACHED EQUIPMENT LIST": máy chính + máy gộp thêm (attachmentRows) VÀ màn hình đã chọn qua
+// "+ Serial màn hình" (data.monitors) — 2 nguồn khác nhau (gộp nhiều máy / màn hình rời đi kèm máy chính) nhưng gộp
+// chung vào 1 bảng để người nhận thấy đủ hết, không phải đối chiếu ngược lại ô "Monitor" xem là máy nào.
+function printedRows(data) {
+  const devices = attachmentRows(data);
+  const monitors = (data.monitors || []).map((m) => ({ id: `monitor-${m.id}`, ten: m.ten, ma: m.ma, loai: 'monitor', model: m.model }));
+  if (devices.length === 0 && monitors.length === 0) return [];
+  const base = devices.length > 0
+    ? devices
+    : [{ id: 'main', ten: data.computer_name, ma: data.service_tag, loai: data.main_loai || (data.kind === 'phone' ? 'phone' : 'laptop'), model: data.model }];
+  return [...base, ...monitors];
+}
+// Có gì để in trang "ATTACHED EQUIPMENT LIST" không — dùng chung ở cả bản xem trước, lúc in thật, lẫn trang Phiếu bàn
+// giao (in lại hàng loạt), tránh lặp lại điều kiện ở nhiều nơi rồi quên sửa đồng bộ khi đổi logic.
+export function hasPrintedAttachments(data) {
+  return (data.attachments?.length || 0) > 0 || (data.monitors?.length || 0) > 0;
 }
 
 function Label({ en, vi }) {
@@ -135,26 +167,18 @@ export function HandoverSheet({ data }) {
       </table>
 
       <div className="hv-band">DETAILS INFORMATION</div>
-      {isPhone ? (
-        <table className="hv-details hv-details-phone">
-          <colgroup><col style={{ width: '43%' }} /><col style={{ width: '57%' }} /></colgroup>
-          <tbody>
-            <tr><th>MODEL</th><td className="hv-center">{data.model}</td></tr>
-            <tr><th>IME/SN</th><td className="hv-center">{serviceTagDisplay(data)}</td></tr>
-            <tr><th>MOBILE PHONE NUMBER</th><td className="hv-center">{data.phone_number}</td></tr>
-            <tr><th>ADAPTER</th><td className="hv-center">{data.adapter}</td></tr>
-            <tr><th>OTHER DEVICES</th><td className="hv-center">{data.other}</td></tr>
-          </tbody>
-        </table>
-      ) : (
       <table className="hv-details">
         <colgroup><col style={{ width: '30%' }} /><col style={{ width: '20%' }} /><col style={{ width: '50%' }} /></colgroup>
         <tbody>
-          <tr><th>COMPUTER NAME</th><td colSpan="2" className="hv-center">{serviceTagDisplay(data, data.computer_name)}</td></tr>
-          <tr><th>SERVICE TAG</th><td colSpan="2" className="hv-center">{serviceTagDisplay(data)}</td></tr>
-          <tr><th>HDD/SSD</th><td colSpan="2" className="hv-center">{data.storage}</td></tr>
-          <tr><th>RAM</th><td colSpan="2" className="hv-center">{data.ram}</td></tr>
-          <tr><th>CPU</th><td colSpan="2" className="hv-center">{data.cpu}</td></tr>
+          <tr><th>DEVICE NAME</th><td colSpan="2" className="hv-center">{serviceTagDisplay(data, data.computer_name)}</td></tr>
+          <tr><th>SERIAL NUMBER</th><td colSpan="2" className="hv-center">{serviceTagDisplay(data)}</td></tr>
+          <tr><th>MODEL</th><td colSpan="2" className="hv-center">{serviceTagDisplay(data, data.model)}</td></tr>
+          <tr><th>HDD/SSD</th><td colSpan="2" className="hv-center">{data.storage || 'N/A'}</td></tr>
+          <tr><th>RAM</th><td colSpan="2" className="hv-center">{data.ram || 'N/A'}</td></tr>
+          <tr><th>CPU</th><td colSpan="2" className="hv-center">{data.cpu || 'N/A'}</td></tr>
+          {/* PSU/ADAPTER và LICENSE KHÔNG dùng serviceTagDisplay — khác với DEVICE NAME/SERIAL NUMBER/MODEL (chắc chắn
+              khác nhau giữa các máy gộp, không có 1 giá trị đúng để ghi), adapter/bản quyền hoàn toàn có thể giống
+              nhau giữa các máy, nên vẫn hiện và sửa tay được bình thường dù gộp bao nhiêu máy. */}
           <tr><th>PSU/ADAPTER</th><td colSpan="2" className="hv-center">{data.adapter}</td></tr>
           <tr>
             <th rowSpan="2">LICENSE</th>
@@ -162,15 +186,16 @@ export function HandoverSheet({ data }) {
           </tr>
           <tr><td className="hv-center hv-sub">Office</td><td className="hv-center">{data.office}</td></tr>
           <tr>
-            <th rowSpan="4">OTHER EQUIPMENT</th>
-            <td className="hv-center hv-sub">IP Address</td><td className="hv-center">{data.ip}</td>
+            {/* Phiếu điện thoại dùng chung khung này nhưng có thêm dòng Mobile Phone Number (máy tính không có) —
+                rowSpan phải cộng thêm 1 cho đúng số dòng thật sự render bên dưới. */}
+            <th rowSpan={isPhone ? 4 : 3}>OTHER DEVICE</th>
+            <td className="hv-center hv-sub">Mouse/Keyboard</td><td className="hv-center">{data.peripherals}</td>
           </tr>
-          <tr><td className="hv-center hv-sub">Mouse/Keyboard</td><td className="hv-center">{data.peripherals}</td></tr>
-          <tr><td className="hv-center hv-sub">Model</td><td className="hv-center">{data.model}</td></tr>
-          <tr><td className="hv-center hv-sub">Other devices</td><td className="hv-center">{data.other}</td></tr>
+          <tr><td className="hv-center hv-sub">Monitor</td><td className="hv-center">{monitorDisplay(data)}</td></tr>
+          {isPhone && <tr><td className="hv-center hv-sub">Mobile Phone Number</td><td className="hv-center">{data.phone_number}</td></tr>}
+          <tr><td className="hv-center hv-sub">Others</td><td className="hv-center">{data.other}</td></tr>
         </tbody>
       </table>
-      )}
 
       <div className="hv-band hv-band-gap">ASSET MANAGEMENT POLICY</div>
       <table className="hv-policy">
@@ -240,7 +265,7 @@ const ATTACH_ROWS_PER_PAGE = 34;
 // ràng (mỗi trang lặp lại đầu đề + tiêu đề cột) thay vì 1 bảng dài lê thê — vừa đúng với số dòng thật sự in vừa 1
 // trang giấy, vừa để bản xem trước ngay trong khung soạn phiếu trông gọn gàng như tài liệu nhiều trang thật.
 export function AttachmentSheet({ data }) {
-  const attachments = attachmentRows(data);
+  const attachments = printedRows(data);
   const pageCount = Math.max(1, Math.ceil(attachments.length / ATTACH_ROWS_PER_PAGE));
   const pages = Array.from({ length: pageCount }, (_, p) => attachments.slice(p * ATTACH_ROWS_PER_PAGE, (p + 1) * ATTACH_ROWS_PER_PAGE));
   return (
@@ -287,9 +312,11 @@ export function AttachmentSheet({ data }) {
   );
 }
 
-const WINDOWS_OPTIONS = ['Win 11 Professional', 'Win 10 Professional'];
-const OFFICE_OPTIONS = ['Office 365', 'Office 2016', 'Office 2019', 'Office 2024'];
-const ADAPTER_OPTIONS = ['Adapter Dell 65W', 'Adapter Dell 45W', 'PSU C13'];
+const WINDOWS_OPTIONS = ['Win 11 Professional', 'Win 10 Professional', 'N/A'];
+const OFFICE_OPTIONS = ['Office 365', 'Office 2016', 'Office 2019', 'Office 2024', 'N/A'];
+// Gộp cả sạc điện thoại vào đây — máy chính giờ chọn theo thứ tự bấm (không còn luôn ưu tiên điện thoại lên trước),
+// nên 1 phiếu máy tính vẫn có thể cần chọn loại sạc của điện thoại nếu máy chính đổi thành điện thoại giữa chừng.
+const ADAPTER_OPTIONS = ['Adapter Dell 65W', 'Adapter Dell 45W', 'PSU C13', 'SAMSUNG Fast Charge Adapter', 'N/A'];
 const PHONE_ADAPTER_OPTIONS = ['SAMSUNG Fast Charge Adapter', 'N/A'];
 const PERIPHERALS_OPTIONS = ['Wire Mouse and Keyboard', 'Wireless Dell', 'N/A'];
 
@@ -316,8 +343,8 @@ const COMPUTER_FIELD_GROUPS = [
   {
     titleKey: 'hv.group.device',
     fields: [
-      ['computer_name', 'Computer name'],
-      ['service_tag', 'Service tag (Serial)'],
+      ['computer_name', 'Device name'],
+      ['service_tag', 'Serial number'],
       ['model', 'Model'],
       ['cpu', 'CPU'],
       ['ram', 'RAM'],
@@ -330,9 +357,9 @@ const COMPUTER_FIELD_GROUPS = [
     fields: [
       ['windows', 'License - Windows', 'select', WINDOWS_OPTIONS],
       ['office', 'License - Office', 'select', OFFICE_OPTIONS],
-      ['ip', 'IP Address'],
       ['peripherals', 'Mouse/Keyboard', 'select', PERIPHERALS_OPTIONS],
-      ['other', 'Other devices'],
+      ['monitor', 'Monitor'],
+      ['other', 'Others'],
     ],
   },
 ];
@@ -345,7 +372,22 @@ const PHONE_FIELD_GROUPS = [
       ['model', 'Model'],
       ['service_tag', 'IME/SN'],
       ['phone_number', 'Mobile phone number'],
+      // Phiếu in ra có sẵn dòng HDD/SSD, RAM, CPU (khung dùng chung với máy tính, tự ghi N/A nếu trống) — thêm ô ở
+      // đây để sửa tay được (đa số điện thoại để trống/N/A, nhưng tablet/điện thoại đời mới vẫn có thể cần ghi).
+      ['cpu', 'CPU'],
+      ['ram', 'RAM'],
+      ['storage', 'HDD/SSD'],
       ['adapter', 'Adapter', 'select', PHONE_ADAPTER_OPTIONS],
+      // Phiếu điện thoại dùng chung khung in với máy tính nên vẫn có dòng License Windows/Office/Mouse-Keyboard —
+      // mặc định "N/A" (không áp dụng cho điện thoại) nhưng vẫn cần ô ở đây để sửa tay được (vd máy có kèm chuột/bàn
+      // phím thật thì đổi lại), không thì không có cách nào sửa trường hiện trên phiếu in.
+      ['windows', 'License - Windows', 'select', WINDOWS_OPTIONS],
+      ['office', 'License - Office', 'select', OFFICE_OPTIONS],
+      ['peripherals', 'Mouse/Keyboard', 'select', PERIPHERALS_OPTIONS],
+      // Có sẵn ô Monitor riêng giống phiếu máy tính — để điện thoại/tablet đi kèm màn hình (vd tablet gắn đế có màn
+      // hình rời) dùng đúng "+ Serial màn hình", không bị đẩy nhầm vào "+ Thêm thiết bị" (chỗ đó dành cho gộp NHIỀU
+      // MÁY CHÍNH khác, thêm nhầm vào đó làm phiếu hiểu lầm có 2 thiết bị chính, in sai "refer to attached file").
+      ['monitor', 'Monitor'],
       ['other', 'Other devices'],
     ],
   },
@@ -353,7 +395,7 @@ const PHONE_FIELD_GROUPS = [
 
 // Các ô thuộc về thiết bị (không phải về người nhận): dùng chung giữa các phiếu cùng model nên được tái dùng/clone.
 // Họ tên, mã NV, bộ phận, serial, tên máy, IP là riêng của từng người/máy nên không nằm trong danh sách này.
-const SPEC_FIELDS = ['cpu', 'ram', 'storage', 'adapter', 'windows', 'office', 'peripherals', 'other'];
+const SPEC_FIELDS = ['cpu', 'ram', 'storage', 'adapter', 'windows', 'office', 'peripherals', 'monitor', 'other'];
 const draftKey = (deviceId) => `warehub-handover-draft-${deviceId}`;
 
 function readDraft(deviceId) {
@@ -467,18 +509,23 @@ function HandoverPicker({ initialSearch, excludeId, onPick, onCancel }) {
 
 // Máy bàn thường kèm màn hình rời — màn hình đã là 1 loại thiết bị có sẵn trong hệ thống (loai: monitor),
 // nên tìm theo Serial của chính nó thay vì phải gõ tay model/hãng.
-function MonitorPicker({ onPick, onCancel }) {
+// excludeIds: màn hình đã chọn rồi thì không hiện lại nữa (picker này cố ý không tự đóng sau mỗi lần chọn, để chọn
+// liên tiếp nhiều màn hình — nếu không lọc, bấm trúng lại đúng màn hình vừa chọn sẽ bị thêm trùng vào danh sách).
+function MonitorPicker({ excludeIds, onPick, onCancel }) {
   const { t } = useT();
   const picker = usePickerSearch('', (search) => (
     api.get('/devices', { search, loai: 'monitor', page: 1, pageSize: 20 }).then((result) => result.devices)
   ));
+  // Lọc ngay ở đây (không phải trong usePickerSearch) để cập nhật tức thì mỗi lần chọn thêm 1 màn hình, không cần
+  // gõ lại ô tìm kiếm mới thấy danh sách refresh (usePickerSearch chỉ tải lại khi "search" đổi).
+  const filteredPicker = { ...picker, rows: picker.rows ? picker.rows.filter((item) => !excludeIds.has(item.id)) : picker.rows };
   return (
     <PickerDialog
       title={t('hv.pick.monitorTitle')}
       help={t('hv.pick.monitorHelp')}
       placeholder={t('hv.pick.monitorPlaceholder')}
       emptyText={t('hv.pick.monitorEmpty')}
-      picker={picker}
+      picker={filteredPicker}
       onCancel={onCancel}
       renderRow={(item) => (
         <PickerRow
@@ -499,15 +546,19 @@ function MonitorPicker({ onPick, onCancel }) {
 function AttachmentPicker({ excludeIds, onPick, onCancel }) {
   const { t } = useT();
   const picker = usePickerSearch('', (search) => (
-    api.get('/devices', { search, page: 1, pageSize: 20 }).then((result) => result.devices.filter((d) => !excludeIds.has(d.id)))
+    api.get('/devices', { search, page: 1, pageSize: 20 }).then((result) => result.devices)
   ));
+  // Lọc lại ở đây (không chỉ trong load ở trên) để cập nhật tức thì mỗi lần thêm 1 thiết bị — hộp thoại này cố ý
+  // không tự đóng sau mỗi lần chọn (để thêm liên tiếp nhiều thiết bị), usePickerSearch chỉ tải lại khi gõ ô tìm
+  // kiếm mới (search đổi), không tự biết excludeIds vừa đổi.
+  const filteredPicker = { ...picker, rows: picker.rows ? picker.rows.filter((item) => !excludeIds.has(item.id)) : picker.rows };
   return (
     <PickerDialog
       title={t('hv.pick.attachTitle')}
       help={t('hv.pick.attachHelp')}
       placeholder={t('hv.pick.attachPlaceholder')}
       emptyText={t('hv.pick.attachEmpty')}
-      picker={picker}
+      picker={filteredPicker}
       onCancel={onCancel}
       renderRow={(item) => (
         <PickerRow
@@ -709,10 +760,23 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
   }
 
   function handleMonitorPick(monitor) {
-    const label = `Monitor : ${monitor.model || monitor.ten} (S/N: ${monitor.ma})`;
-    setData((current) => ({ ...current, other: current.other ? `${current.other}, ${label}` : label }));
+    const label = `${monitor.model || monitor.ten} (S/N: ${monitor.ma})`;
+    // "monitors" (mảng) là nguồn đúng — vừa liệt kê vào trang "ATTACHED EQUIPMENT LIST" (xem printedRows), vừa tự
+    // suy ra chuỗi "monitor" hiển thị/in gọn, không giữ 2 nguồn lệch nhau. KHÔNG tự đóng hộp chọn sau khi chọn 1 cái
+    // — để chọn liên tiếp nhiều màn hình cùng lúc, tự bấm "×" trên hộp thoại khi chọn xong (giống AttachmentPicker
+    // nhưng picker này cố ý ở lại mở vì người dùng hay chọn nhiều màn hình cùng lúc hơn).
+    setData((current) => {
+      const monitors = [...(current.monitors || []), { id: monitor.id, ten: monitor.ten, ma: monitor.ma, model: monitor.model, label }];
+      return { ...current, monitors, monitor: monitors.map((m) => m.label).join(', ') };
+    });
     setNotice(t('hv.monitorAdded', { code: monitor.ma }));
-    setMonitorPickerOpen(false);
+  }
+
+  function removeMonitor(id) {
+    setData((current) => {
+      const monitors = (current.monitors || []).filter((m) => m.id !== id);
+      return { ...current, monitors, monitor: monitors.map((m) => m.label).join(', ') };
+    });
   }
 
   // Điền nhanh "Case for <model> (N ea)" cho phiếu điện thoại; N gồm cả máy chính khi có đính kèm. Vẫn sửa tay được.
@@ -726,7 +790,7 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
   function handleAttachmentPick(item) {
     setData((current) => ({ ...current, attachments: [...(current.attachments || []), item] }));
     setNotice(t('hv.attachAdded', { code: item.ma }));
-    setAttachmentPickerOpen(false);
+    // KHÔNG tự đóng — để thêm liên tiếp nhiều thiết bị cùng lúc, tự bấm "×" trên hộp thoại khi chọn xong (giống Monitor).
   }
 
   function removeAttachment(id) {
@@ -750,14 +814,30 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
                     {group.fields.map(([key, label, type, options]) => (
                       <label key={key} className={key === 'other' ? 'hv-other-field' : undefined}>
                         {label.startsWith('hv.') ? t(label) : label}
-                        {key === 'other' && data.kind !== 'phone' && <button type="button" className="hv-monitor-btn" onClick={() => setMonitorPickerOpen(true)}>{t('hv.monitorSerial')}</button>}
+                        {key === 'monitor' && <button type="button" className="hv-monitor-btn" onClick={() => setMonitorPickerOpen(true)}>{t('hv.monitorSerial')}</button>}
                         {key === 'other' && data.kind === 'phone' && <button type="button" className="hv-monitor-btn" onClick={handleCaseFill}>{t('hv.caseByModel')}</button>}
-                        {type === 'select' ? (
+                        {key === 'monitor' && (data.monitors || []).length > 0 ? (
+                          <ul className="hv-attach-list">
+                            {data.monitors.map((m) => (
+                              <li key={m.id}>
+                                <span className="mono">{m.ma}</span>
+                                <span>{m.label}</span>
+                                <button type="button" onClick={() => removeMonitor(m.id)} aria-label={t('hv.removeItem', { code: m.ma })}>×</button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : type === 'select' ? (
                           <select className="form-control" value={data[key]} onChange={(event) => updateField(key, event.target.value)}>
                             {(data[key] && !options.includes(data[key]) ? [data[key], ...options] : options).map((option) => <option key={option} value={option}>{option}</option>)}
                           </select>
                         ) : (
-                          <input className="form-control" type={type || 'text'} value={data[key]} onChange={(event) => updateField(key, event.target.value)} />
+                          <input
+                            className="form-control"
+                            type={type || 'text'}
+                            value={data[key]}
+                            placeholder={key === 'monitor' ? t('hv.monitorPlaceholder') : undefined}
+                            onChange={(event) => updateField(key, event.target.value)}
+                          />
                         )}
                       </label>
                     ))}
@@ -790,7 +870,7 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
             </div>
             <div className="hv-preview">
               <HandoverSheet data={data} />
-              {(data.attachments || []).length > 0 && <AttachmentSheet data={data} />}
+              {hasPrintedAttachments(data) && <AttachmentSheet data={data} />}
             </div>
           </div>
           <div className="modal-actions modal-footer">
@@ -803,7 +883,13 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
             <button type="button" className="btn-primary" onClick={handlePrint} disabled={busy}>{t('hv.printSlip')}</button>
           </div>
           {pickerOpen && <HandoverPicker initialSearch={device?.model || data.model} excludeId={allocatedRef.current?.id} onPick={handlePick} onCancel={() => setPickerOpen(false)} />}
-          {monitorPickerOpen && <MonitorPicker onPick={handleMonitorPick} onCancel={() => setMonitorPickerOpen(false)} />}
+          {monitorPickerOpen && (
+            <MonitorPicker
+              excludeIds={new Set((data.monitors || []).map((m) => m.id))}
+              onPick={handleMonitorPick}
+              onCancel={() => setMonitorPickerOpen(false)}
+            />
+          )}
           {attachmentPickerOpen && (
             <AttachmentPicker
               excludeIds={new Set([device?.id, ...(data.attachments || []).map((item) => item.id)].filter(Boolean))}
@@ -816,7 +902,7 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
       {createPortal(
         <div className="handover-print-root">
           <HandoverSheet data={data} />
-          {(data.attachments || []).length > 0 && <AttachmentSheet data={data} />}
+          {hasPrintedAttachments(data) && <AttachmentSheet data={data} />}
         </div>,
         document.body,
       )}

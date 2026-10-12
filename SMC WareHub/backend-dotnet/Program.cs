@@ -3,6 +3,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -99,7 +100,68 @@ var origins = configuration.GetSection("Cors:Origins").Get<string[]>() ?? [];
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod()));
 
+// Trang /swagger — xem và thử trực tiếp mọi API (vd cho đồng nghiệp muốn tự gọi API tạo QR, không cần đọc code).
+// Chỉ hiện DANH SÁCH api; gọi API thật vẫn phải có token hợp lệ (dán vào nút "Authorize") như mọi client khác,
+// không tự ý bỏ qua xác thực của từng endpoint.
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new() { Title = "WareHub API", Version = "v1" });
+    options.AddSecurityDefinition("Bearer", new()
+    {
+        Name = "Authorization",
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT",
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Description = "Dán token lấy từ POST /api/auth/login (chỉ phần chuỗi token, không cần gõ chữ \"Bearer\").",
+    });
+    options.AddSecurityRequirement(new()
+    {
+        { new Microsoft.OpenApi.Models.OpenApiSecurityScheme { Reference = new() { Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme, Id = "Bearer" } }, [] },
+    });
+});
+
 var app = builder.Build();
+
+// /swagger để lộ TOÀN BỘ hình dạng API (tên trường, đường dẫn...) cho bất kỳ ai ghé trang — dù gọi API thật vẫn cần
+// token hợp lệ, bản thân việc này cũng là thông tin không nên công khai cho người ngoài dò. Chặn thêm 1 lớp Basic Auth
+// riêng (không liên quan tài khoản WareHub) trước khi cho vào; CHƯA cấu hình Swagger:Username/Password trong appsettings
+// thì tắt hẳn /swagger (an toàn mặc định) thay vì để hở.
+var swaggerUser = configuration["Swagger:Username"];
+var swaggerPass = configuration["Swagger:Password"];
+if (!string.IsNullOrWhiteSpace(swaggerUser) && !string.IsNullOrWhiteSpace(swaggerPass))
+{
+    app.Use(async (context, next) =>
+    {
+        if (!context.Request.Path.StartsWithSegments("/swagger")) { await next(); return; }
+        var header = context.Request.Headers.Authorization.ToString();
+        if (header.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(header["Basic ".Length..]));
+                var sep = decoded.IndexOf(':');
+                if (sep >= 0)
+                {
+                    var user = decoded[..sep];
+                    var pass = decoded[(sep + 1)..];
+                    if (user == swaggerUser && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(pass), Encoding.UTF8.GetBytes(swaggerPass)))
+                    {
+                        await next();
+                        return;
+                    }
+                }
+            }
+            catch (FormatException) { /* header lỗi định dạng -> coi như chưa xác thực */ }
+        }
+        context.Response.Headers.WWWAuthenticate = "Basic realm=\"WareHub Swagger\"";
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+    });
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
 app.UseForwardedHeaders();
 app.Use(async (context, next) =>
 {
@@ -146,6 +208,45 @@ app.Use(async (context, next) =>
 });
 app.UseCors();
 app.UseAuthentication();
+// Xác thực bằng API Key (header "X-Api-Key") — thay thế hẳn JWT cho riêng request này, dùng cho người/hệ thống ngoài
+// không có tài khoản đăng nhập WareHub, chỉ được gọi đúng những API thuộc các "scope" đã gắn cho key (xem ApiKeyScope
+// bên dưới và nhóm "/api/apikeys" để admin tạo/thu hồi key). Đặt SAU UseAuthentication (không bị JwtBearer ghi đè lại
+// context.User) và TRƯỚC middleware tra CurrentUser theo DB bên dưới (middleware đó được sửa để bỏ qua request loại này).
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.StartsWithSegments("/api") && context.Request.Headers.TryGetValue("X-Api-Key", out var presented) && !string.IsNullOrWhiteSpace(presented))
+    {
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(presented.ToString().Trim())));
+        var db = context.RequestServices.GetRequiredService<WareHubDbContext>();
+        var key = await db.ApiKeys.SingleOrDefaultAsync(x => x.KeyHash == hash);
+        if (key is null)
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await context.Response.WriteAsJsonAsync(new { error = "API key không hợp lệ" });
+            return;
+        }
+        var scopes = key.Scopes.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        var allowed = scopes.Any(s => ApiKeyScope.PathPrefixes.TryGetValue(s, out var prefix) && context.Request.Path.StartsWithSegments(prefix));
+        if (!allowed)
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsJsonAsync(new { error = "API key này không có quyền gọi API này" });
+            return;
+        }
+        var identity = new ClaimsIdentity("ApiKey");
+        identity.AddClaim(new Claim("api_key_id", key.Id.ToString()));
+        identity.AddClaim(new Claim("api_key_name", key.Name));
+        context.User = new ClaimsPrincipal(identity);
+        // Chỉ ghi lại DB khi mốc cũ đã quá 1 phút — key dùng để gọi liên tục (vd script tự động) không nên tốn 1 lượt
+        // ghi DB cho MỖI request chỉ để cập nhật "lần dùng gần nhất", "chính xác tới phút" là đủ cho mục đích theo dõi.
+        if (key.LastUsedAt is null || key.LastUsedAt < DateTime.UtcNow.AddMinutes(-1))
+        {
+            key.LastUsedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+        }
+    }
+    await next();
+});
 // Chế độ bảo trì: chặn mọi API với 503 (giao diện web đọc mã này để hiện màn hình "đang bảo trì"), trừ admin và các
 // đường cần thiết để bật/tắt/kiểm tra (health, trạng thái bảo trì, đăng nhập). Đặt TRƯỚC bước tra cứu người dùng
 // trong DB nên vẫn hoạt động khi đang thao tác trên cơ sở dữ liệu.
@@ -153,6 +254,9 @@ var maintenance = app.Services.GetRequiredService<MaintenanceState>();
 var userCache = app.Services.GetRequiredService<UserCache>();
 // Băm 1 mật khẩu giả cho tài khoản không tồn tại, để thời gian phản hồi đăng nhập không lộ tên nào có thật.
 var dummyUser = new User { PasswordHash = new PasswordHasher<User>().HashPassword(new User(), "dummy-password-used-only-for-timing") };
+// "admin" ở đây khớp luôn cả superadmin (token của superadmin được gắn thêm claim Role="admin" lúc tạo — xem
+// CreateToken), nên chỉ cần kiểm tra IsInRole("admin") là đủ. Cùng 1 quy tắc "ai được bỏ qua bảo trì" này còn được
+// kiểm tra lại 1 lần nữa ở /api/auth/login (chỗ chưa có token/claims nào để IsInRole) — đổi quy tắc thì sửa cả 2 chỗ.
 app.Use(async (context, next) =>
 {
     var info = maintenance.Current;
@@ -167,7 +271,9 @@ app.Use(async (context, next) =>
 });
 app.Use(async (context, next) =>
 {
-    if (context.User.Identity?.IsAuthenticated == true)
+    // Request xác thực bằng API Key không gắn với tài khoản WareHub nào (không có "CurrentUser") — quyền hạn của nó
+    // đã được xét xong ở middleware API Key phía trên, không cần/không thể tra cứu DB người dùng ở đây.
+    if (context.User.Identity?.IsAuthenticated == true && context.User.Identity.AuthenticationType != "ApiKey")
     {
         var id = context.User.FindFirstValue(JwtRegisteredClaimNames.Sub) ?? context.User.FindFirstValue(ClaimTypes.NameIdentifier);
         var user = int.TryParse(id, out var userId) ? await userCache.GetAsync(userId, context.RequestAborted) : null;
@@ -243,7 +349,10 @@ auth.MapPost("/login", async (LoginRequest request, HttpContext context, WareHub
         return Results.Json(new { error = "Sai tên đăng nhập hoặc mật khẩu" }, statusCode: StatusCodes.Status401Unauthorized);
     }
     guard.RecordSuccess(ip, username);
-    // Đang bảo trì: chỉ admin được vào (để tắt bảo trì); người khác nhận 503 để giao diện hiện màn hình bảo trì.
+    // Đang bảo trì: chỉ admin/superadmin được vào (để tắt bảo trì); người khác nhận 503 để giao diện hiện màn hình
+    // bảo trì. Cùng 1 quy tắc được kiểm tra lại lần nữa ở middleware phía trên (IsInRole("admin")) cho mọi request
+    // SAU khi đã đăng nhập — ở đây chưa có token/claims nên phải tự so trực tiếp với Role trong DB. Đổi quy tắc "ai
+    // được bỏ qua bảo trì" thì phải sửa cả 2 chỗ.
     if (maintenance.Current is { Enabled: true } info && user.Role is not ("admin" or "superadmin"))
         return Results.Json(new { error = info.Message, maintenance = true, until = info.Until }, statusCode: StatusCodes.Status503ServiceUnavailable);
     return Results.Ok(new { token = CreateToken(user, config), user = UserDto(user) });
@@ -284,8 +393,6 @@ devices.MapGet("/", async (string? search, string? loai, string? lifecycle_statu
         "ghi_chu" => x => x.GhiChu ?? "",
         "registered_at" => x => x.RegisteredAt ?? DateOnly.MinValue,
         "updated_at" => x => x.UpdatedAt,
-        // Các cột này bấm được ở giao diện (COLUMN_DEFS trong Devices.jsx) nhưng thiếu ở đây — bấm vào tiêu đề tưởng
-        // đã sắp xếp (mũi tên vẫn đổi chiều) nhưng danh sách thực ra không đổi gì, luôn rơi về mặc định CreatedAt.
         "cpu" => x => x.Cpu ?? "",
         "ram" => x => x.Ram ?? "",
         "storage" => x => x.Storage ?? "",
@@ -545,14 +652,18 @@ handovers.MapPost("/", async (HandoverRequest request, HttpContext context, Ware
         try { await db.SaveChangesAsync(); return Results.Ok(new { no = customNo, id = handover.Id }); }
         catch (DbUpdateException) { return Results.Conflict(new { error = $"Số phiếu \"{customNo}\" đã tồn tại" }); }
     }
-    // Hai người in cùng lúc có thể tính ra cùng một số; khoá duy nhất (no, kind) chặn trùng, ta thử lại với số kế tiếp.
+    // Hai người in cùng lúc có thể tính ra cùng một số; khoá duy nhất (no, kind) chặn trùng, ta thử lại với số kế
+    // tiếp. Chỉ hỏi DB quét lại cả tháng ở LẦN ĐẦU — từ lần trùng số thứ 2 trở đi chỉ +1 tiếp vào số đã tính, không
+    // quét lại DB từ đầu (lúc tranh chấp — đúng lúc này càng nên tránh thêm 1 lượt quét toàn bảng nữa).
+    var prefix = $"{day.Year % 100:D2}{day.Month:D2}";
+    var sequence = int.Parse((await NextHandoverNoAsync(db, day, kind)).AsSpan(prefix.Length));
     for (var attempt = 0; attempt < 5; attempt++)
     {
-        var no = await NextHandoverNoAsync(db, day, kind);
+        var no = $"{prefix}{sequence:D3}";
         var handover = new Handover { No = no, Kind = kind, DeviceId = device?.Id, DeviceMa = device?.Ma, FullName = Truncate(request.FullName, 100), Payload = HandoverPayload(request.Data), UserId = user.Id, CreatedByName = user.FullName };
         db.Handovers.Add(handover);
         try { await db.SaveChangesAsync(); return Results.Ok(new { no, id = handover.Id }); }
-        catch (DbUpdateException) { db.ChangeTracker.Clear(); }
+        catch (DbUpdateException) { db.ChangeTracker.Clear(); sequence++; }
     }
     return Results.Conflict(new { error = "Không cấp được số phiếu, vui lòng thử lại" });
 });
@@ -640,6 +751,40 @@ qr.MapGet("/devices/{deviceId:int}", async (int deviceId, int? size, WareHubDbCo
     var device = await db.Devices.AsNoTracking().SingleOrDefaultAsync(x => x.Id == deviceId); if (device is null) return Results.NotFound(new { error = "Không tìm thấy thiết bị" });
     var pixels = Math.Clamp(size ?? 256, 64, 1024); var payload = device.Ma.Trim();
     using var generator = new QRCodeGenerator(); using var data = generator.CreateQrCode(payload, QRCodeGenerator.ECCLevel.M); var png = new PngByteQRCode(data).GetGraphic(Math.Max(pixels / 25, 4)); return Results.File(png, "image/png");
+});
+
+// Quản lý API Key (chỉ admin) — cấp cho người/hệ thống ngoài gọi 1 số API nhất định mà không cần tài khoản đăng nhập.
+var apiKeys = app.MapGroup("/api/apikeys").RequireAuthorization("admin");
+apiKeys.MapGet("/", async (WareHubDbContext db) => Results.Ok(new
+{
+    keys = await db.ApiKeys.AsNoTracking().OrderByDescending(x => x.CreatedAt)
+        .Select(x => new { x.Id, x.Name, scopes = x.Scopes, created_by = x.CreatedByName, created_at = x.CreatedAt, last_used_at = x.LastUsedAt })
+        .ToListAsync(),
+}));
+apiKeys.MapPost("/", async (ApiKeyCreateRequest request, HttpContext context, WareHubDbContext db) =>
+{
+    var name = Truncate(request.Name, 100);
+    if (string.IsNullOrWhiteSpace(name)) return Results.BadRequest(new { error = "Vui lòng nhập tên để nhận biết API key (vd \"QR cho Nguyễn Văn A\")" });
+    var scopes = (request.Scopes ?? []).Select(s => s.Trim().ToLowerInvariant()).Where(s => s.Length > 0).Distinct().ToList();
+    if (scopes.Count == 0) return Results.BadRequest(new { error = $"Chọn ít nhất 1 quyền. Quyền hợp lệ: {string.Join(", ", ApiKeyScope.PathPrefixes.Keys)}" });
+    var unknown = scopes.Where(s => !ApiKeyScope.PathPrefixes.ContainsKey(s)).ToList();
+    if (unknown.Count > 0) return Results.BadRequest(new { error = $"Quyền không hợp lệ: {string.Join(", ", unknown)}. Quyền hợp lệ: {string.Join(", ", ApiKeyScope.PathPrefixes.Keys)}" });
+
+    var rawKey = $"whk_{Convert.ToHexString(RandomNumberGenerator.GetBytes(32))}";
+    var currentUser = (User)context.Items["CurrentUser"]!;
+    var key = new ApiKey { Name = name!, KeyHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawKey))), Scopes = string.Join(',', scopes), CreatedByName = currentUser.FullName };
+    db.ApiKeys.Add(key);
+    await db.SaveChangesAsync();
+    // Chuỗi key gốc chỉ trả về ĐÚNG 1 LẦN này — sau đó CSDL chỉ còn bản băm, không lấy lại được nữa, mất thì phải tạo key mới.
+    return Results.Created($"/api/apikeys/{key.Id}", new { id = key.Id, key = rawKey, name = key.Name, scopes });
+});
+apiKeys.MapDelete("/{id:int}", async (int id, WareHubDbContext db) =>
+{
+    var key = await db.ApiKeys.FindAsync(id);
+    if (key is null) return Results.NotFound(new { error = "Không tìm thấy API key" });
+    db.ApiKeys.Remove(key);
+    await db.SaveChangesAsync();
+    return Results.Ok(new { ok = true });
 });
 
 app.Run();
@@ -1014,10 +1159,17 @@ static async Task EnsureSchemaAsync(WareHubDbContext db)
     await EnsureIndexAsync(db, "devices", "IX_devices_PhongBan", "`phong_ban`");
     await EnsureIndexAsync(db, "print_history", "IX_print_history_PrintedAt", "`printed_at`");
     await EnsureDeviceHistoryTableAsync(db);
+    await EnsureApiKeyTableAsync(db);
     await EnsureHandoverTableAsync(db);
     await EnsureHandoverKindColumnAsync(db);
     await EnsureHistoryActorNameColumnsAsync(db);
     await EnsureIndexAsync(db, "handovers", "IX_handovers_CreatedAt", "`created_at`");
+    // Luồng "kích hoạt" (is_active=0 chờ duyệt rồi mới in/bàn giao được) đã bỏ hẳn — API /activate từng dùng để
+    // chuyển trạng thái này không còn nữa, và /api/print cũng không lọc is_active nữa (xem code endpoint đó). Thiết
+    // bị TẠO MỚI từ nay luôn is_active=true (ToDevice), nhưng thiết bị cũ tạo từ TRƯỚC lần nâng cấp này mà còn đang
+    // is_active=0 sẽ bị kẹt vĩnh viễn (không còn cách nào set lại qua UI/API) — cập nhật 1 lần cho đúng bất biến mới,
+    // không thì chạy vô hại (không còn dòng nào is_active=0 thì không đổi gì).
+    await db.Database.ExecuteSqlRawAsync("UPDATE devices SET is_active = 1 WHERE is_active = 0");
     // Chỉ mục thừa/không còn dùng — idx_devices_loai và idx_devices_phong_ban trùng cột với IX_devices_Loai/IX_devices_PhongBan ở trên (tạo ra ngoài code trước đây);
     // IX_devices_IsActive vô dụng từ khi mọi thiết bị luôn is_active = true (không còn giá trị nào khác để lọc). Giữ lại chỉ khiến mỗi lần ghi thiết bị chậm hơn, không giúp gì cho truy vấn.
     await EnsureIndexDroppedAsync(db, "devices", "idx_devices_loai");
@@ -1183,4 +1335,29 @@ static async Task EnsureHistoryActorNameColumnsAsync(WareHubDbContext db)
         await db.Database.ExecuteSqlRawAsync("ALTER TABLE handovers ADD COLUMN created_by_name VARCHAR(100) NULL");
         await db.Database.ExecuteSqlRawAsync("UPDATE handovers h JOIN users u ON u.Id = h.user_id SET h.created_by_name = u.full_name WHERE h.created_by_name IS NULL");
     }
+}
+static async Task EnsureApiKeyTableAsync(WareHubDbContext db)
+{
+    if (await TableExistsAsync(db, "api_keys")) return;
+    await db.Database.ExecuteSqlRawAsync("""
+        CREATE TABLE api_keys (
+            Id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(100) NOT NULL,
+            key_hash CHAR(64) NOT NULL,
+            scopes VARCHAR(200) NOT NULL,
+            created_by_name VARCHAR(100) NULL,
+            created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            last_used_at DATETIME(6) NULL,
+            UNIQUE INDEX IX_api_keys_KeyHash (key_hash)
+        )
+        """);
+}
+// Khoá "scope" (tên quyền) -> tiền tố đường dẫn API mà quyền đó mở khoá cho API Key. Thêm quyền mới cho API Key chỉ
+// cần thêm 1 dòng ở đây (không cần sửa gì ở endpoint đích — endpoint chỉ cần đã RequireAuthorization() như thường lệ).
+static class ApiKeyScope
+{
+    public static readonly Dictionary<string, string> PathPrefixes = new()
+    {
+        ["qr"] = "/api/qr",
+    };
 }

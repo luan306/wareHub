@@ -83,6 +83,22 @@ public sealed class DeviceHistory
     public Device Device { get; set; } = null!;
 }
 
+// Cấp cho người/hệ thống ngoài gọi 1 số API nhất định mà không cần tài khoản đăng nhập đầy đủ (xem ApiKeyScope.PathPrefixes
+// trong Program.cs) — mỗi key chỉ mở khoá đúng những API thuộc các "scope" đã gắn, không có quyền gì khác ngoài đó.
+[Table("api_keys")]
+public sealed class ApiKey
+{
+    public int Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+    /// <summary>Băm SHA-256 (dạng hex) của key thật — key gốc chỉ hiện ĐÚNG 1 LẦN lúc tạo, không lưu lại để tra cứu.</summary>
+    [Column("key_hash")] public string KeyHash { get; set; } = "";
+    /// <summary>Danh sách quyền, cách nhau bởi dấu phẩy (vd "qr") — khớp với ApiKeyScope.PathPrefixes.</summary>
+    [Column("scopes")] public string Scopes { get; set; } = "";
+    [Column("created_by_name")] public string? CreatedByName { get; set; }
+    [Column("created_at")] public DateTime CreatedAt { get; set; }
+    [Column("last_used_at")] public DateTime? LastUsedAt { get; set; }
+}
+
 [Table("handovers")]
 public sealed class Handover
 {

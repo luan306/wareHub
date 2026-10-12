@@ -1,5 +1,6 @@
 import { translate, translateServerMessage } from '../i18n';
 import { ApiError, connectionEvents } from './connection';
+import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 
 const BASE = '/api';
 // Quá thời gian này mà máy chủ không trả lời thì coi như mất kết nối (tránh nút bấm treo mãi khi mạng chập chờn).
@@ -22,22 +23,18 @@ async function request(path, { method = 'GET', body, params } = {}) {
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let res;
   try {
-    res = await fetch(url, {
+    res = await fetchWithTimeout(url, {
+      timeoutMs: REQUEST_TIMEOUT_MS,
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
     });
   } catch {
     // Không tới được máy chủ: mất mạng, máy chủ đang tắt/khởi động lại, hoặc quá thời gian chờ.
     connectionEvents.emit({ type: 'unreachable' });
     throw new ApiError(translate('error.network'), { code: 'network' });
-  } finally {
-    clearTimeout(timer);
   }
 
   // 401 từ chính endpoint đăng nhập nghĩa là sai tài khoản/mật khẩu, không phải phiên hết hạn —
