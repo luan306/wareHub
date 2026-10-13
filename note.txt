@@ -1,0 +1,16 @@
+Stop-Service WareHubBackend
+cd "C:\SMC WareHub\backend-dotnet"
+dotnet build -c Release
+Start-Service WareHubBackend
+
+
+cd "C:\SMC WareHub\frontend"
+npm run build
+
+
+$login = Invoke-RestMethod http://localhost:4000/api/auth/login -Method Post -Body (@{username="api_share"; password="Smc-Website01"} | ConvertTo-Json) -ContentType "application/json"
+$headers = @{ Authorization = "Bearer $($login.token)" }
+Invoke-RestMethod "http://localhost:4000/api/handovers?pageSize=5" -Headers $headers | ConvertTo-Json -Depth 5
+
+
+https://<địa chỉ server của bạn>/swagger

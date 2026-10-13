@@ -226,7 +226,9 @@ app.Use(async (context, next) =>
             return;
         }
         var scopes = key.Scopes.Split(',', StringSplitOptions.RemoveEmptyEntries);
-        var allowed = scopes.Any(s => ApiKeyScope.PathPrefixes.TryGetValue(s, out var prefix) && context.Request.Path.StartsWithSegments(prefix));
+        var allowed = scopes.Any(s => ApiKeyScope.Definitions.TryGetValue(s, out var def)
+            && context.Request.Path.StartsWithSegments(def.PathPrefix)
+            && def.Methods.Contains(context.Request.Method, StringComparer.OrdinalIgnoreCase));
         if (!allowed)
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
@@ -254,13 +256,10 @@ var maintenance = app.Services.GetRequiredService<MaintenanceState>();
 var userCache = app.Services.GetRequiredService<UserCache>();
 // Băm 1 mật khẩu giả cho tài khoản không tồn tại, để thời gian phản hồi đăng nhập không lộ tên nào có thật.
 var dummyUser = new User { PasswordHash = new PasswordHasher<User>().HashPassword(new User(), "dummy-password-used-only-for-timing") };
-// "admin" ở đây khớp luôn cả superadmin (token của superadmin được gắn thêm claim Role="admin" lúc tạo — xem
-// CreateToken), nên chỉ cần kiểm tra IsInRole("admin") là đủ. Cùng 1 quy tắc "ai được bỏ qua bảo trì" này còn được
-// kiểm tra lại 1 lần nữa ở /api/auth/login (chỗ chưa có token/claims nào để IsInRole) — đổi quy tắc thì sửa cả 2 chỗ.
 app.Use(async (context, next) =>
 {
     var info = maintenance.Current;
-    if (info.Enabled && context.Request.Path.StartsWithSegments("/api") && !IsMaintenanceExempt(context.Request) && !context.User.IsInRole("admin"))
+    if (info.Enabled && context.Request.Path.StartsWithSegments("/api") && !IsMaintenanceExempt(context.Request) && !IsMaintenanceExemptRole(context.User.FindFirstValue(ClaimTypes.Role)))
     {
         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
         context.Response.Headers.RetryAfter = "60";
@@ -350,10 +349,9 @@ auth.MapPost("/login", async (LoginRequest request, HttpContext context, WareHub
     }
     guard.RecordSuccess(ip, username);
     // Đang bảo trì: chỉ admin/superadmin được vào (để tắt bảo trì); người khác nhận 503 để giao diện hiện màn hình
-    // bảo trì. Cùng 1 quy tắc được kiểm tra lại lần nữa ở middleware phía trên (IsInRole("admin")) cho mọi request
-    // SAU khi đã đăng nhập — ở đây chưa có token/claims nên phải tự so trực tiếp với Role trong DB. Đổi quy tắc "ai
-    // được bỏ qua bảo trì" thì phải sửa cả 2 chỗ.
-    if (maintenance.Current is { Enabled: true } info && user.Role is not ("admin" or "superadmin"))
+    // bảo trì — dùng CHUNG đúng 1 hàm IsMaintenanceExemptRole với middleware phía trên (chỗ đó check qua JWT claims
+    // sau khi đăng nhập, ở đây chưa có claims nên so trực tiếp Role trong DB), không định nghĩa lại quy tắc lần 2.
+    if (maintenance.Current is { Enabled: true } info && !IsMaintenanceExemptRole(user.Role))
         return Results.Json(new { error = info.Message, maintenance = true, until = info.Until }, statusCode: StatusCodes.Status503ServiceUnavailable);
     return Results.Ok(new { token = CreateToken(user, config), user = UserDto(user) });
 });
@@ -378,7 +376,10 @@ devices.MapGet("/", async (string? search, string? loai, string? lifecycle_statu
         query = query.Where(x => printedQuery.Any(p => p.DeviceId == x.Id));
     }
     else if (printed == false) query = query.Where(x => !db.PrintHistory.Any(p => p.DeviceId == x.Id));
-    var descending = sortDir == "desc";
+    // Chưa chọn cột nào để sắp xếp (sortBy rỗng, rơi về mặc định CreatedAt bên dưới) thì mặc định MỚI NHẤT TRƯỚC —
+    // không thì thiết bị vừa thêm/đồng bộ lại nằm tuốt cuối danh sách, phải tự bấm sắp xếp mới thấy. Đã CHỌN cột cụ
+    // thể rồi thì vẫn theo đúng chiều người dùng bấm (mặc định tăng dần khi mới bấm, như trước giờ).
+    var descending = sortBy is null ? sortDir != "asc" : sortDir == "desc";
     // Chỉ nhận cột nằm trong danh sách cho phép sẵn — tránh nhận trực tiếp tên cột từ client vào OrderBy.
     Expression<Func<Device, object>> keySelector = sortBy switch
     {
@@ -630,11 +631,11 @@ print.MapGet("/history", async (string? from, string? to, string? search, int? p
 });
 
 var handovers = app.MapGroup("/api/handovers").RequireAuthorization();
-handovers.MapGet("/next-no", async (DateOnly? date, string? loai, WareHubDbContext db) =>
+handovers.MapGet("/next-no", async (DateOnly? date, WareHubDbContext db) =>
 {
     var day = date ?? DateOnly.FromDateTime(DateTime.Today);
     if (day.Year is < 2000 or > 2099) return Results.BadRequest(new { error = "Ngày lập biên bản không hợp lệ" });
-    return Results.Ok(new { no = await NextHandoverNoAsync(db, day, HandoverKind(loai)) });
+    return Results.Ok(new { no = await NextHandoverNoAsync(db, day) });
 });
 handovers.MapPost("/", async (HandoverRequest request, HttpContext context, WareHubDbContext db) =>
 {
@@ -656,7 +657,7 @@ handovers.MapPost("/", async (HandoverRequest request, HttpContext context, Ware
     // tiếp. Chỉ hỏi DB quét lại cả tháng ở LẦN ĐẦU — từ lần trùng số thứ 2 trở đi chỉ +1 tiếp vào số đã tính, không
     // quét lại DB từ đầu (lúc tranh chấp — đúng lúc này càng nên tránh thêm 1 lượt quét toàn bảng nữa).
     var prefix = $"{day.Year % 100:D2}{day.Month:D2}";
-    var sequence = int.Parse((await NextHandoverNoAsync(db, day, kind)).AsSpan(prefix.Length));
+    var sequence = int.Parse((await NextHandoverNoAsync(db, day)).AsSpan(prefix.Length));
     for (var attempt = 0; attempt < 5; attempt++)
     {
         var no = $"{prefix}{sequence:D3}";
@@ -766,9 +767,9 @@ apiKeys.MapPost("/", async (ApiKeyCreateRequest request, HttpContext context, Wa
     var name = Truncate(request.Name, 100);
     if (string.IsNullOrWhiteSpace(name)) return Results.BadRequest(new { error = "Vui lòng nhập tên để nhận biết API key (vd \"QR cho Nguyễn Văn A\")" });
     var scopes = (request.Scopes ?? []).Select(s => s.Trim().ToLowerInvariant()).Where(s => s.Length > 0).Distinct().ToList();
-    if (scopes.Count == 0) return Results.BadRequest(new { error = $"Chọn ít nhất 1 quyền. Quyền hợp lệ: {string.Join(", ", ApiKeyScope.PathPrefixes.Keys)}" });
-    var unknown = scopes.Where(s => !ApiKeyScope.PathPrefixes.ContainsKey(s)).ToList();
-    if (unknown.Count > 0) return Results.BadRequest(new { error = $"Quyền không hợp lệ: {string.Join(", ", unknown)}. Quyền hợp lệ: {string.Join(", ", ApiKeyScope.PathPrefixes.Keys)}" });
+    if (scopes.Count == 0) return Results.BadRequest(new { error = $"Chọn ít nhất 1 quyền. Quyền hợp lệ: {string.Join(", ", ApiKeyScope.Definitions.Keys)}" });
+    var unknown = scopes.Where(s => !ApiKeyScope.Definitions.ContainsKey(s)).ToList();
+    if (unknown.Count > 0) return Results.BadRequest(new { error = $"Quyền không hợp lệ: {string.Join(", ", unknown)}. Quyền hợp lệ: {string.Join(", ", ApiKeyScope.Definitions.Keys)}" });
 
     var rawKey = $"whk_{Convert.ToHexString(RandomNumberGenerator.GetBytes(32))}";
     var currentUser = (User)context.Items["CurrentUser"]!;
@@ -794,6 +795,10 @@ static bool IsMaintenanceExempt(HttpRequest request) =>
     || request.Path.Equals("/api/ready", StringComparison.OrdinalIgnoreCase)
     || (HttpMethods.IsGet(request.Method) && request.Path.Equals("/api/maintenance", StringComparison.OrdinalIgnoreCase))
     || (HttpMethods.IsPost(request.Method) && request.Path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase));
+// Ai được BỎ QUA chế độ bảo trì (admin/superadmin, để còn vào tắt bảo trì được) — dùng chung ở cả middleware (sau khi
+// đã có JWT/claims) lẫn /api/auth/login (trước khi có JWT, phải so trực tiếp Role trong DB) để chỉ có 1 chỗ định
+// nghĩa quy tắc này, đổi chính sách (vd thêm vai trò được miễn) chỉ cần sửa đúng 1 nơi.
+static bool IsMaintenanceExemptRole(string? role) => role is "admin" or "superadmin";
 
 static string? ValidateDevice(DeviceRequest request)
 {
@@ -1072,14 +1077,16 @@ static string? HandoverPayload(JsonElement? data) =>
 // Điện thoại/tablet dùng chung 1 dãy số riêng với máy tính — không phải loại thiết bị nào cũng cùng 1 lô giấy in sẵn.
 static string HandoverKind(string? loai) => loai is "phone" or "tablet" ? "mobile" : "computer";
 // Số phiếu bàn giao dạng YYMMxxx: 2609001 = năm 26, tháng 09, phiếu thứ 001 của tháng đó. Máy tính và điện thoại/tablet
-// dùng CHUNG định dạng (không có ký hiệu phân biệt trong chuỗi số) nhưng đếm riêng theo "kind" — 2 nhóm có thể cùng ra
-// "2609001" mà không coi là trùng, vì khoá duy nhất là (no, kind) chứ không phải riêng "no" (xem WareHubDbContext).
-static async Task<string> NextHandoverNoAsync(WareHubDbContext db, DateOnly day, string kind)
+// giờ dùng CHUNG 1 khung phiếu in (xem HandoverSheet.jsx) nên cũng tăng tuần tự CHUNG 1 dãy số, không tách riêng theo
+// "kind" nữa như trước — "kind" vẫn giữ lại trên mỗi phiếu để lọc theo loại ở trang Phiếu bàn giao, chỉ không còn dùng
+// để chia dãy số. Khoá duy nhất vẫn là (no, kind) (xem WareHubDbContext) — không đổi gì, phiếu MỚI từ nay dùng chung 1
+// dãy số nên không bao giờ trùng no dù khác kind; phiếu CŨ trước đây có thể đã trùng no giữa 2 kind, vẫn phân biệt được.
+static async Task<string> NextHandoverNoAsync(WareHubDbContext db, DateOnly day)
 {
     var prefix = $"{day.Year % 100:D2}{day.Month:D2}";
-    // Lấy hết số của tháng (CÙNG nhóm) rồi tự đọc số lớn nhất ở client (thay vì sort chuỗi lấy 1 dòng cuối): phiếu "số
+    // Lấy hết số của tháng (MỌI kind) rồi tự đọc số lớn nhất ở client (thay vì sort chuỗi lấy 1 dòng cuối): phiếu "số
     // liệu cũ" lấy từ trường Delivery form tự do bên GLPI không chắc đúng dạng số, int.Parse thẳng có thể lỗi 500 nếu dính rác.
-    var nos = await db.Handovers.AsNoTracking().Where(x => x.Kind == kind && x.No.StartsWith(prefix)).Select(x => x.No).ToListAsync();
+    var nos = await db.Handovers.AsNoTracking().Where(x => x.No.StartsWith(prefix)).Select(x => x.No).ToListAsync();
     var maxSequence = nos
         .Select(no => int.TryParse(no.AsSpan(prefix.Length), out var n) ? n : (int?)null)
         .Where(n => n is not null)
@@ -1352,12 +1359,15 @@ static async Task EnsureApiKeyTableAsync(WareHubDbContext db)
         )
         """);
 }
-// Khoá "scope" (tên quyền) -> tiền tố đường dẫn API mà quyền đó mở khoá cho API Key. Thêm quyền mới cho API Key chỉ
-// cần thêm 1 dòng ở đây (không cần sửa gì ở endpoint đích — endpoint chỉ cần đã RequireAuthorization() như thường lệ).
+// Khoá "scope" (tên quyền) -> (tiền tố đường dẫn, các phương thức HTTP được phép) mà quyền đó mở khoá cho API Key.
+// Thêm quyền mới cho API Key chỉ cần thêm 1 dòng ở đây (không cần sửa gì ở endpoint đích — endpoint chỉ cần đã
+// RequireAuthorization() như thường lệ). Giới hạn theo method để 1 scope "chỉ xem" (vd "handovers") không vô tình
+// mở luôn cả tạo/sửa/xoá chỉ vì chung 1 nhóm đường dẫn.
 static class ApiKeyScope
 {
-    public static readonly Dictionary<string, string> PathPrefixes = new()
+    public static readonly Dictionary<string, (string PathPrefix, string[] Methods)> Definitions = new()
     {
-        ["qr"] = "/api/qr",
+        ["qr"] = ("/api/qr", ["GET"]),
+        ["handovers"] = ("/api/handovers", ["GET"]),
     };
 }

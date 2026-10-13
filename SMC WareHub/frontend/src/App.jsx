@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { PrintQueueProvider } from './context/PrintQueueContext';
 import { ConnectionProvider } from './context/ConnectionContext';
 import { ConnectionStatus } from './components/ConnectionStatus';
@@ -11,6 +11,13 @@ import { Handovers } from './pages/Handovers';
 import { DeviceHistory } from './pages/DeviceHistory';
 import { Users } from './pages/Users';
 
+// Đã đăng nhập rồi mà gõ thẳng /login (hoặc bấm Back) thì đưa luôn về trang chính — không hiện lại form đăng nhập
+// (dễ gây tưởng nhầm cần đăng nhập lại, hoặc lỡ tay đăng nhập đè bằng tài khoản khác giữa chừng).
+function LoginRoute() {
+  const { user } = useAuth();
+  return user ? <Navigate to="/thiet-bi" replace /> : <Login />;
+}
+
 export default function App() {
   return (
     <AuthProvider>
@@ -18,7 +25,7 @@ export default function App() {
       <ConnectionStatus />
       <PrintQueueProvider>
         <Routes>
-          <Route path="/login" element={<Login />} />
+          <Route path="/login" element={<LoginRoute />} />
 
           <Route
             element={

@@ -687,11 +687,11 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
     }
     setIssued(false);
     let cancelled = false;
-    api.get('/handovers/next-no', { date: data.register_date, loai: device?.loai || '' })
+    api.get('/handovers/next-no', { date: data.register_date })
       .then((result) => { if (!cancelled) setData((current) => ({ ...current, no: result.no })); })
       .catch(() => { if (!cancelled) setData((current) => ({ ...current, no: '' })); });
     return () => { cancelled = true; };
-  }, [data.register_date, manualNo, device?.loai]);
+  }, [data.register_date, manualNo]);
 
   // Gõ tay vào ô "Số phiếu": tắt tự cấp. Xoá trống ô lại thì quay về tự cấp như cũ.
   function updateNoField(value) {

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { QRCodeCanvas, QRCodeSVG } from 'qrcode.react';
 import { useT } from '../i18n';
+import { isoToday } from '../utils/date';
 import smcLogo from '../img/Logo_SMC_Corporation.svg';
 import smcLogoRaw from '../img/Logo_SMC_Corporation.svg?raw';
 
@@ -9,7 +10,6 @@ import smcLogoRaw from '../img/Logo_SMC_Corporation.svg?raw';
 const LOGO_VIEWBOX = '0 0 307.42249 97.970001';
 const LOGO_PATHS = smcLogoRaw.replace(/^[\s\S]*?<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '');
 const PHONE_QR_SIZE = 180;
-const todayIso = () => new Date().toISOString().slice(0, 10);
 const FIT_TEXT_MAX_SIZE = 20;
 const FIT_TEXT_MIN_SIZE = 12;
 
@@ -229,10 +229,10 @@ export function LabelPreview({ device, printMode = false }) {
 
 export function PrintLabelModal({ device, open, onClose, onPrint }) {
   const { t } = useT();
-  const [date, setDate] = useState(todayIso);
+  const [date, setDate] = useState(isoToday);
 
   useEffect(() => {
-    if (open) setDate(todayIso());
+    if (open) setDate(isoToday());
   }, [open, device]);
 
   if (!open || !device) return null;
