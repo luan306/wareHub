@@ -99,6 +99,30 @@ public sealed class ApiKey
     [Column("last_used_at")] public DateTime? LastUsedAt { get; set; }
 }
 
+// Cho mượn thiết bị IT tạm thời (khác Handover — bàn giao lâu dài/vĩnh viễn): có hạn trả và ngày trả thực tế, kèm
+// chữ ký vẽ tay của người mượn chụp lại NGAY lúc mượn (Signature không đổi sau khi đã lưu).
+[Table("device_loans")]
+public sealed class DeviceLoan
+{
+    public int Id { get; set; }
+    [Column("no")] public string No { get; set; } = "";
+    [Column("borrower_name")] public string BorrowerName { get; set; } = "";
+    [Column("department")] public string? Department { get; set; }
+    [Column("employee_id")] public string? EmployeeId { get; set; }
+    [Column("cost_center")] public string? CostCenter { get; set; }
+    [Column("borrowed_at")] public DateTime BorrowedAt { get; set; }
+    [Column("due_at")] public DateTime? DueAt { get; set; }
+    [Column("returned_at")] public DateTime? ReturnedAt { get; set; }
+    /// <summary>JSON tự do: {"devices":[{id,ma,ten,loai,model}],"notes":"..."} — giống Payload của Handover.</summary>
+    [Column("payload")] public string? Payload { get; set; }
+    /// <summary>Chữ ký vẽ bằng chuột/ngón tay lúc mượn, dạng data URL PNG (base64) — ảnh chụp tại thời điểm mượn, không sửa lại sau.</summary>
+    [Column("signature")] public string? Signature { get; set; }
+    [Column("user_id")] public int UserId { get; set; }
+    /// <summary>Tên người lập phiếu, chụp lại ngay lúc lập — giữ nguyên dù tài khoản đó sau này bị xoá.</summary>
+    [Column("created_by_name")] public string? CreatedByName { get; set; }
+    [Column("created_at")] public DateTime CreatedAt { get; set; }
+}
+
 [Table("handovers")]
 public sealed class Handover
 {

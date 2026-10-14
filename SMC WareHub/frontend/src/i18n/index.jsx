@@ -2,9 +2,10 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { common, serverMessages } from './messages/common';
 import { devices } from './messages/devices';
 import { handovers } from './messages/handovers';
+import { loans } from './messages/loans';
 
 // Mỗi khoá là [tiếng Việt, tiếng Anh] để hai ngôn ngữ luôn nằm cạnh nhau, khó bỏ sót.
-const MESSAGES = { ...common, ...devices, ...handovers };
+const MESSAGES = { ...common, ...devices, ...handovers, ...loans };
 
 export const LANGUAGES = ['vi', 'en'];
 const STORAGE_KEY = 'warehub-lang';

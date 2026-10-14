@@ -17,6 +17,7 @@ export const common = {
   'nav.groupSystem': ['Hệ thống', 'System'],
   'nav.devices': ['Thiết bị', 'Devices'],
   'nav.handovers': ['Phiếu bàn giao', 'Handover slips'],
+  'nav.loans': ['Mượn thiết bị', 'Equipment loans'],
   'nav.editHistory': ['Lịch sử sửa', 'Edit history'],
   'nav.users': ['Người dùng', 'Users'],
   'nav.expandLong': ['Mở rộng thanh điều hướng', 'Expand sidebar'],
@@ -68,6 +69,7 @@ export const common = {
   'loai.monitor': ['Màn hình', 'Monitor'],
   'loai.phone': ['Điện thoại', 'Phone'],
   'loai.printer': ['Máy in', 'Printer'],
+  'loai.other': ['Khác', 'Other'],
   'kho.12': ['Điện thoại', 'Phone'],
   'kho.24': ['Laptop / Tablet / PDA / Màn hình', 'Laptop / Tablet / PDA / Monitor'],
 

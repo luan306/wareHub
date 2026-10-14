@@ -9,6 +9,7 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
     public DbSet<PrintHistory> PrintHistory => Set<PrintHistory>();
     public DbSet<DeviceHistory> DeviceHistory => Set<DeviceHistory>();
     public DbSet<Handover> Handovers => Set<Handover>();
+    public DbSet<DeviceLoan> DeviceLoans => Set<DeviceLoan>();
     public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -77,6 +78,18 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
             entity.HasIndex(x => new { x.No, x.Kind }).IsUnique().HasDatabaseName("IX_handovers_no_kind");
             entity.Property(x => x.DeviceMa).HasMaxLength(50);
             entity.Property(x => x.FullName).HasMaxLength(100);
+            entity.Property(x => x.CreatedByName).HasMaxLength(100);
+            entity.Property(x => x.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP(6)").ValueGeneratedOnAdd();
+        });
+        modelBuilder.Entity<DeviceLoan>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.No).HasMaxLength(12).IsRequired();
+            entity.HasIndex(x => x.No).IsUnique();
+            entity.Property(x => x.BorrowerName).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.Department).HasMaxLength(100);
+            entity.Property(x => x.EmployeeId).HasMaxLength(50);
+            entity.Property(x => x.CostCenter).HasMaxLength(50);
             entity.Property(x => x.CreatedByName).HasMaxLength(100);
             entity.Property(x => x.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP(6)").ValueGeneratedOnAdd();
         });

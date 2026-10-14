@@ -14,6 +14,7 @@ const NAV_GROUPS = [
     items: [
       { to: '/thiet-bi', icon: '▦', labelKey: 'nav.devices' },
       { to: '/phieu-ban-giao', icon: '☰', labelKey: 'nav.handovers' },
+      { to: '/muon-thiet-bi', icon: '⇄', labelKey: 'nav.loans' },
     ],
   },
   {

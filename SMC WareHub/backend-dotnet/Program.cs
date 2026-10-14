@@ -648,7 +648,7 @@ handovers.MapPost("/", async (HandoverRequest request, HttpContext context, Ware
     var customNo = Truncate(request.No, 12);
     if (!string.IsNullOrWhiteSpace(customNo))
     {
-        var handover = new Handover { No = customNo, Kind = kind, DeviceId = device?.Id, DeviceMa = device?.Ma, FullName = Truncate(request.FullName, 100), Payload = HandoverPayload(request.Data), UserId = user.Id, CreatedByName = user.FullName };
+        var handover = new Handover { No = customNo, Kind = kind, DeviceId = device?.Id, DeviceMa = device?.Ma, FullName = Truncate(request.FullName, 100), Payload = JsonPayload(request.Data), UserId = user.Id, CreatedByName = user.FullName };
         db.Handovers.Add(handover);
         try { await db.SaveChangesAsync(); return Results.Ok(new { no = customNo, id = handover.Id }); }
         catch (DbUpdateException) { return Results.Conflict(new { error = $"Số phiếu \"{customNo}\" đã tồn tại" }); }
@@ -661,7 +661,7 @@ handovers.MapPost("/", async (HandoverRequest request, HttpContext context, Ware
     for (var attempt = 0; attempt < 5; attempt++)
     {
         var no = $"{prefix}{sequence:D3}";
-        var handover = new Handover { No = no, Kind = kind, DeviceId = device?.Id, DeviceMa = device?.Ma, FullName = Truncate(request.FullName, 100), Payload = HandoverPayload(request.Data), UserId = user.Id, CreatedByName = user.FullName };
+        var handover = new Handover { No = no, Kind = kind, DeviceId = device?.Id, DeviceMa = device?.Ma, FullName = Truncate(request.FullName, 100), Payload = JsonPayload(request.Data), UserId = user.Id, CreatedByName = user.FullName };
         db.Handovers.Add(handover);
         try { await db.SaveChangesAsync(); return Results.Ok(new { no, id = handover.Id }); }
         catch (DbUpdateException) { db.ChangeTracker.Clear(); sequence++; }
@@ -682,7 +682,7 @@ handovers.MapPut("/{id:int}", async (int id, HandoverUpdateRequest request, Ware
         handover.No = newNo;
     }
     handover.FullName = Truncate(request.FullName, 100);
-    handover.Payload = HandoverPayload(request.Data);
+    handover.Payload = JsonPayload(request.Data);
     await db.SaveChangesAsync();
     return Results.Ok(new { no = handover.No, id = handover.Id });
 });
@@ -742,6 +742,130 @@ handovers.MapDelete("/{id:int}", async (int id, WareHubDbContext db) =>
     var handover = await db.Handovers.FindAsync(id);
     if (handover is null) return Results.NotFound(new { error = "Không tìm thấy phiếu" });
     db.Handovers.Remove(handover);
+    await db.SaveChangesAsync();
+    return Results.Ok(new { ok = true });
+}).RequireAuthorization("admin");
+
+// Cho mượn thiết bị IT tạm thời (khác hẳn Handover — bàn giao lâu dài): có hạn trả (due_at) và ngày trả thực tế
+// (returned_at, null = đang mượn), kèm chữ ký vẽ tay của người mượn chụp lại ngay lúc mượn.
+var loans = app.MapGroup("/api/loans").RequireAuthorization();
+// Gợi ý tên người mượn khi gõ — tra thẳng Active Directory (không giới hạn admin như /api/users/ldap-search, vì
+// nhân viên thường/IT helpdesk vẫn cần lập phiếu mượn) và KHÔNG lọc bớt theo tài khoản WareHub đã có: ai cũng có thể
+// là người mượn, không chỉ người có tài khoản đăng nhập hệ thống.
+loans.MapGet("/ldap-search", async (string? q, LdapService ldap, CancellationToken ct) =>
+{
+    var query = q?.Trim();
+    if (query?.Length == 1) return Results.BadRequest(new { error = "Nhập ít nhất 2 ký tự để tìm" });
+    if (!ldap.IsConfigured) return Results.BadRequest(new { error = "Chưa cấu hình kết nối LDAP (mục \"Ldap\" trong cấu hình)." });
+    List<LdapUserMatch> matches;
+    try { matches = await ldap.SearchUsersAsync(query, ct); }
+    catch (Exception ex) when (ex is LdapException or InvalidOperationException) { return Results.BadRequest(new { error = $"Không kết nối được LDAP: {ex.Message}" }); }
+    return Results.Ok(new
+    {
+        results = matches.Select(m => new { username = m.Username, full_name = m.FullName, email = m.Email, department = m.Department, employee_id = m.EmployeeId }),
+        truncated = matches.Count >= LdapService.MaxResults,
+    });
+});
+loans.MapGet("/next-no", async (DateOnly? date, WareHubDbContext db) =>
+{
+    var day = date ?? DateOnly.FromDateTime(DateTime.Today);
+    if (day.Year is < 2000 or > 2099) return Results.BadRequest(new { error = "Ngày không hợp lệ" });
+    return Results.Ok(new { no = await NextLoanNoAsync(db, day) });
+});
+loans.MapPost("/", async (DeviceLoanRequest request, HttpContext context, WareHubDbContext db) =>
+{
+    var borrowerName = Truncate(request.BorrowerName, 100);
+    if (string.IsNullOrWhiteSpace(borrowerName)) return Results.BadRequest(new { error = "Thiếu họ tên người mượn" });
+    if (string.IsNullOrWhiteSpace(request.Signature)) return Results.BadRequest(new { error = "Thiếu chữ ký người mượn" });
+    var payload = JsonPayload(request.Data);
+    if (!(request.Data is { ValueKind: JsonValueKind.Object } dataValue && dataValue.TryGetProperty("devices", out var devicesEl) && devicesEl.ValueKind == JsonValueKind.Array && devicesEl.GetArrayLength() > 0))
+        return Results.BadRequest(new { error = "Chưa chọn thiết bị cho mượn" });
+    var borrowedAt = request.BorrowedAt ?? DateTime.Now;
+    var day = DateOnly.FromDateTime(borrowedAt);
+    if (day.Year is < 2000 or > 2099) return Results.BadRequest(new { error = "Thời gian mượn không hợp lệ" });
+    var user = (User)context.Items["CurrentUser"]!;
+    var customNo = Truncate(request.No, 12);
+    if (!string.IsNullOrWhiteSpace(customNo))
+    {
+        var loan = new DeviceLoan { No = customNo, BorrowerName = borrowerName, Department = Truncate(request.Department, 100), EmployeeId = Truncate(request.EmployeeId, 50), CostCenter = Truncate(request.CostCenter, 50), BorrowedAt = borrowedAt, DueAt = request.DueAt, Payload = payload, Signature = request.Signature, UserId = user.Id, CreatedByName = user.FullName };
+        db.DeviceLoans.Add(loan);
+        try { await db.SaveChangesAsync(); return Results.Ok(new { no = customNo, id = loan.Id }); }
+        catch (DbUpdateException) { return Results.Conflict(new { error = $"Số phiếu \"{customNo}\" đã tồn tại" }); }
+    }
+    // Hai người lập phiếu cùng lúc có thể tính ra cùng 1 số; khoá duy nhất "no" chặn trùng, thử lại với số kế tiếp
+    // (chỉ quét lại DB ở lần đầu, từ lần trùng thứ 2 chỉ +1 tiếp — giống NextHandoverNoAsync).
+    var prefix = $"{day.Year % 100:D2}{day.Month:D2}";
+    var sequence = int.Parse((await NextLoanNoAsync(db, day)).AsSpan(prefix.Length));
+    for (var attempt = 0; attempt < 5; attempt++)
+    {
+        var no = $"{prefix}{sequence:D3}";
+        var loan = new DeviceLoan { No = no, BorrowerName = borrowerName, Department = Truncate(request.Department, 100), EmployeeId = Truncate(request.EmployeeId, 50), CostCenter = Truncate(request.CostCenter, 50), BorrowedAt = borrowedAt, DueAt = request.DueAt, Payload = payload, Signature = request.Signature, UserId = user.Id, CreatedByName = user.FullName };
+        db.DeviceLoans.Add(loan);
+        try { await db.SaveChangesAsync(); return Results.Ok(new { no, id = loan.Id }); }
+        catch (DbUpdateException) { db.ChangeTracker.Clear(); sequence++; }
+    }
+    return Results.Conflict(new { error = "Không cấp được số phiếu, vui lòng thử lại" });
+});
+// Sửa thông tin phiếu TRƯỚC khi trả (đổi bộ phận, hạn trả, thêm/bớt thiết bị...) — không cho sửa borrowed_at/chữ ký
+// (chụp lại đúng thời điểm mượn, sửa lại sẽ sai bản chất bằng chứng đã ký).
+loans.MapPut("/{id:int}", async (int id, DeviceLoanUpdateRequest request, WareHubDbContext db) =>
+{
+    var loan = await db.DeviceLoans.FindAsync(id);
+    if (loan is null) return Results.NotFound(new { error = "Không tìm thấy phiếu" });
+    var borrowerName = Truncate(request.BorrowerName, 100);
+    if (!string.IsNullOrWhiteSpace(borrowerName)) loan.BorrowerName = borrowerName;
+    loan.Department = Truncate(request.Department, 100);
+    loan.EmployeeId = Truncate(request.EmployeeId, 50);
+    loan.CostCenter = Truncate(request.CostCenter, 50);
+    loan.DueAt = request.DueAt;
+    if (request.Data is not null) loan.Payload = JsonPayload(request.Data);
+    await db.SaveChangesAsync();
+    return Results.Ok(new { ok = true, id = loan.Id });
+});
+// Đánh dấu đã trả — ReturnedAt null nghĩa là đang mượn/quá hạn, khác null nghĩa là đã trả xong (xem cách tính trạng
+// thái ở GET / bên dưới). Không cho "trả" lại lần 2 (phải xoá phiếu nếu lỡ bấm nhầm rồi muốn mượn tiếp).
+loans.MapPut("/{id:int}/return", async (int id, DeviceLoanReturnRequest request, WareHubDbContext db) =>
+{
+    var loan = await db.DeviceLoans.FindAsync(id);
+    if (loan is null) return Results.NotFound(new { error = "Không tìm thấy phiếu" });
+    if (loan.ReturnedAt is not null) return Results.Conflict(new { error = "Phiếu này đã đánh dấu trả rồi" });
+    loan.ReturnedAt = request.ReturnedAt ?? DateTime.Now;
+    await db.SaveChangesAsync();
+    return Results.Ok(new { ok = true, returned_at = loan.ReturnedAt });
+});
+loans.MapGet("/", async (string? search, string? status, int? page, int? pageSize, WareHubDbContext db) =>
+{
+    search = ClampText(search, 100);
+    var query = db.DeviceLoans.AsNoTracking().AsQueryable();
+    if (!string.IsNullOrWhiteSpace(search))
+    {
+        var term = search.Trim();
+        query = query.Where(x => x.No.Contains(term) || x.BorrowerName.Contains(term) || (x.Department ?? "").Contains(term) || (x.EmployeeId ?? "").Contains(term) || (x.CostCenter ?? "").Contains(term) || (x.Payload ?? "").Contains(term));
+    }
+    var now = DateTime.Now;
+    // Trạng thái không lưu cột riêng — tính thẳng từ returned_at/due_at mỗi lần truy vấn (chỉ 3 trạng thái, không cần
+    // lưu thừa 1 cột dễ lệch nếu quên cập nhật khi đổi due_at).
+    if (status == "returned") query = query.Where(x => x.ReturnedAt != null);
+    else if (status == "overdue") query = query.Where(x => x.ReturnedAt == null && x.DueAt != null && x.DueAt < now);
+    else if (status == "borrowed") query = query.Where(x => x.ReturnedAt == null && (x.DueAt == null || x.DueAt >= now));
+    var (currentPage, limit) = ParsePaging(page, pageSize, defaultSize: 30);
+    var total = await query.CountAsync();
+    var rows = await query.OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id).Skip((currentPage - 1) * limit).Take(limit).ToListAsync();
+    var items = rows.Select(x => new
+    {
+        x.Id, x.No, x.BorrowerName, x.Department, x.EmployeeId, x.CostCenter, x.BorrowedAt, x.DueAt, x.ReturnedAt, x.CreatedAt,
+        CreatedByName = x.CreatedByName,
+        Status = x.ReturnedAt != null ? "returned" : x.DueAt != null && x.DueAt < now ? "overdue" : "borrowed",
+        Signature = x.Signature,
+        Data = x.Payload is null ? (JsonElement?)null : JsonSerializer.Deserialize<JsonElement>(x.Payload),
+    });
+    return Results.Ok(new { loans = items, total, page = currentPage, pageSize = limit, totalPages = TotalPages(total, limit) });
+});
+loans.MapDelete("/{id:int}", async (int id, WareHubDbContext db) =>
+{
+    var loan = await db.DeviceLoans.FindAsync(id);
+    if (loan is null) return Results.NotFound(new { error = "Không tìm thấy phiếu" });
+    db.DeviceLoans.Remove(loan);
     await db.SaveChangesAsync();
     return Results.Ok(new { ok = true });
 }).RequireAuthorization("admin");
@@ -1071,8 +1195,9 @@ static string? ClipHistory(string? value) => value is { Length: > 255 } ? value[
 // Phân trang dùng chung: trang tối thiểu 1, số dòng mỗi trang trong khoảng 1..100.
 static (int Page, int Limit) ParsePaging(int? page, int? pageSize, int defaultSize) => (Math.Max(page ?? 1, 1), Math.Clamp(pageSize ?? defaultSize, 1, 100));
 static int TotalPages(int total, int limit) => Math.Max((int)Math.Ceiling(total / (double)limit), 1);
-// Nội dung phiếu là JSON do trang web gửi lên; chỉ nhận object và giới hạn dung lượng để không nhét rác vào DB.
-static string? HandoverPayload(JsonElement? data) =>
+// Nội dung phiếu (bàn giao, mượn thiết bị...) là JSON tự do do trang web gửi lên; chỉ nhận object và giới hạn
+// dung lượng để không nhét rác vào DB. Dùng chung cho mọi loại phiếu có cột Payload dạng JSON.
+static string? JsonPayload(JsonElement? data) =>
     data is { ValueKind: JsonValueKind.Object } value && value.GetRawText().Length <= 16_000 ? value.GetRawText() : null;
 // Điện thoại/tablet dùng chung 1 dãy số riêng với máy tính — không phải loại thiết bị nào cũng cùng 1 lô giấy in sẵn.
 static string HandoverKind(string? loai) => loai is "phone" or "tablet" ? "mobile" : "computer";
@@ -1087,6 +1212,20 @@ static async Task<string> NextHandoverNoAsync(WareHubDbContext db, DateOnly day)
     // Lấy hết số của tháng (MỌI kind) rồi tự đọc số lớn nhất ở client (thay vì sort chuỗi lấy 1 dòng cuối): phiếu "số
     // liệu cũ" lấy từ trường Delivery form tự do bên GLPI không chắc đúng dạng số, int.Parse thẳng có thể lỗi 500 nếu dính rác.
     var nos = await db.Handovers.AsNoTracking().Where(x => x.No.StartsWith(prefix)).Select(x => x.No).ToListAsync();
+    var maxSequence = nos
+        .Select(no => int.TryParse(no.AsSpan(prefix.Length), out var n) ? n : (int?)null)
+        .Where(n => n is not null)
+        .Select(n => n!.Value)
+        .DefaultIfEmpty(0)
+        .Max();
+    return $"{prefix}{maxSequence + 1:D3}";
+}
+// Số phiếu mượn thiết bị dạng YYMMxxx — dãy số RIÊNG của bảng device_loans (độc lập hoàn toàn với Handover, 2 bảng
+// khác nhau nên không lo trùng "no" giữa phiếu mượn và phiếu bàn giao dù cùng tháng). Logic giống hệt NextHandoverNoAsync.
+static async Task<string> NextLoanNoAsync(WareHubDbContext db, DateOnly day)
+{
+    var prefix = $"{day.Year % 100:D2}{day.Month:D2}";
+    var nos = await db.DeviceLoans.AsNoTracking().Where(x => x.No.StartsWith(prefix)).Select(x => x.No).ToListAsync();
     var maxSequence = nos
         .Select(no => int.TryParse(no.AsSpan(prefix.Length), out var n) ? n : (int?)null)
         .Where(n => n is not null)
@@ -1171,6 +1310,8 @@ static async Task EnsureSchemaAsync(WareHubDbContext db)
     await EnsureHandoverKindColumnAsync(db);
     await EnsureHistoryActorNameColumnsAsync(db);
     await EnsureIndexAsync(db, "handovers", "IX_handovers_CreatedAt", "`created_at`");
+    await EnsureDeviceLoanTableAsync(db);
+    await EnsureIndexAsync(db, "device_loans", "IX_device_loans_CreatedAt", "`created_at`");
     // Luồng "kích hoạt" (is_active=0 chờ duyệt rồi mới in/bàn giao được) đã bỏ hẳn — API /activate từng dùng để
     // chuyển trạng thái này không còn nữa, và /api/print cũng không lọc is_active nữa (xem code endpoint đó). Thiết
     // bị TẠO MỚI từ nay luôn is_active=true (ToDevice), nhưng thiết bị cũ tạo từ TRƯỚC lần nâng cấp này mà còn đang
@@ -1279,6 +1420,37 @@ static async Task EnsureHandoverTableAsync(WareHubDbContext db)
         """);
     if (!await ColumnExistsAsync(db, "handovers", "payload"))
         await db.Database.ExecuteSqlRawAsync("ALTER TABLE handovers ADD COLUMN payload LONGTEXT NULL AFTER full_name");
+}
+static async Task EnsureDeviceLoanTableAsync(WareHubDbContext db)
+{
+    if (!await TableExistsAsync(db, "device_loans"))
+    {
+        await db.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE device_loans (
+                Id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                `no` VARCHAR(12) NOT NULL,
+                borrower_name VARCHAR(100) NOT NULL,
+                department VARCHAR(100) NULL,
+                employee_id VARCHAR(50) NULL,
+                cost_center VARCHAR(50) NULL,
+                borrowed_at DATETIME NOT NULL,
+                due_at DATETIME NULL,
+                returned_at DATETIME NULL,
+                payload LONGTEXT NULL,
+                signature LONGTEXT NULL,
+                user_id INT NOT NULL,
+                created_by_name VARCHAR(100) NULL,
+                created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                UNIQUE INDEX IX_device_loans_no (`no`)
+            )
+            """);
+        return;
+    }
+    // Bảng tạo từ bản trước khi có 2 cột này (mã số nhân viên, cost center của người mượn) — bổ sung thêm cho DB cũ.
+    if (!await ColumnExistsAsync(db, "device_loans", "employee_id"))
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE device_loans ADD COLUMN employee_id VARCHAR(50) NULL AFTER department");
+    if (!await ColumnExistsAsync(db, "device_loans", "cost_center"))
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE device_loans ADD COLUMN cost_center VARCHAR(50) NULL AFTER employee_id");
 }
 // Tách dãy số riêng cho máy tính/điện thoại-tablet (xem HandoverKind, NextHandoverNoAsync): thêm cột "kind", dò lại
 // giá trị cho các phiếu đã có sẵn trước khi có cột này (theo thiết bị đã gắn, hoặc cờ "kind":"phone" cũ trong Payload

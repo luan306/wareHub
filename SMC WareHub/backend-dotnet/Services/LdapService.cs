@@ -5,7 +5,7 @@ using WareHub.Api.Contracts;
 
 namespace WareHub.Api.Services;
 
-public sealed record LdapUserMatch(string Username, string FullName, string? Email);
+public sealed record LdapUserMatch(string Username, string FullName, string? Email, string? Department = null, string? EmployeeId = null);
 
 /// <summary>
 /// Kết nối Active Directory qua giao thức LDAP: (1) tìm người dùng theo tên/tài khoản (dùng cho ô "Thêm từ LDAP" ở
@@ -36,9 +36,9 @@ public sealed class LdapService(IOptions<LdapOptions> options, ILogger<LdapServi
     public const int MaxResults = 500;
 
     /// <summary>
-    /// Tìm người dùng AD có tên hiển thị hoặc tài khoản (sAMAccountName) chứa từ khoá, tối đa <see cref="MaxResults"/>
-    /// dòng. Để trống query thì liệt kê luôn (không bắt gõ trước) — mở khung "Thêm từ LDAP" là thấy ngay danh sách
-    /// thay vì ô trống trơn.
+    /// Tìm người dùng AD có tên hiển thị, tài khoản (sAMAccountName) HOẶC mã số nhân viên (employeeID) chứa từ khoá
+    /// — gõ tên hay gõ MSNV đều ra kết quả, tối đa <see cref="MaxResults"/> dòng. Để trống query thì liệt kê luôn
+    /// (không bắt gõ trước) — mở khung "Thêm từ LDAP" là thấy ngay danh sách thay vì ô trống trơn.
     /// </summary>
     public Task<List<LdapUserMatch>> SearchUsersAsync(string? query, CancellationToken ct) => Task.Run(() =>
     {
@@ -50,8 +50,8 @@ public sealed class LdapService(IOptions<LdapOptions> options, ILogger<LdapServi
 
         var filter = string.IsNullOrWhiteSpace(query)
             ? "(&(objectCategory=person)(objectClass=user))"
-            : $"(&(objectCategory=person)(objectClass=user)(|(cn=*{EscapeFilter(query)}*)(sAMAccountName=*{EscapeFilter(query)}*)))";
-        var request = new SearchRequest(_options.BaseDn, filter, SearchScope.Subtree, "cn", "sAMAccountName", "mail");
+            : $"(&(objectCategory=person)(objectClass=user)(|(cn=*{EscapeFilter(query)}*)(sAMAccountName=*{EscapeFilter(query)}*)(employeeID=*{EscapeFilter(query)}*)))";
+        var request = new SearchRequest(_options.BaseDn, filter, SearchScope.Subtree, "cn", "sAMAccountName", "mail", "department", "employeeID");
         // Chặn ở tầng LDAP luôn (không chỉ cắt bớt sau khi lấy về) — base DN cả công ty có thể rất nhiều user,
         // không giới hạn ở server AD thì mỗi lần mở khung (query rỗng) sẽ kéo về toàn bộ, chậm và tốn băng thông.
         request.SizeLimit = MaxResults;
@@ -63,8 +63,10 @@ public sealed class LdapService(IOptions<LdapOptions> options, ILogger<LdapServi
             var username = entry.Attributes["sAMAccountName"]?[0]?.ToString();
             var fullName = entry.Attributes["cn"]?[0]?.ToString();
             var email = entry.Attributes["mail"]?.Count > 0 ? entry.Attributes["mail"][0]?.ToString() : null;
+            var department = entry.Attributes["department"]?.Count > 0 ? entry.Attributes["department"][0]?.ToString() : null;
+            var employeeId = entry.Attributes["employeeID"]?.Count > 0 ? entry.Attributes["employeeID"][0]?.ToString() : null;
             if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(fullName))
-                results.Add(new LdapUserMatch(username, fullName, email));
+                results.Add(new LdapUserMatch(username, fullName, email, department, employeeId));
         }
         return results.Take(MaxResults).ToList();
     }, ct);

@@ -37,8 +37,13 @@
   --radius-lg: 16px;
 
   --font-display: 'Sora Variable', 'Sora', 'Inter Variable', sans-serif;
-  --font-body: 'Inter Variable', 'Inter', 'Segoe UI', sans-serif;
+  --font-body: 'Inter Variable', 'Inter', sans-serif;
   --font-mono: 'IBM Plex Mono', monospace;
+  /* Phiếu bàn giao/mượn thiết bị mô phỏng kiểu chữ cổ điển của mẫu giấy gốc (chữ có chân / không chân) — Tinos và
+     Arimo là bản MIỄN PHÍ, giấy phép mở (Apache 2.0) tương thích kích thước với Times New Roman/Arial, không cần
+     máy in có cài sẵn font bản quyền của Microsoft vẫn ra đúng hình thức. */
+  --font-print-serif: 'Tinos', serif;
+  --font-print-sans: 'Arimo Variable', sans-serif;
 }
 
 .theme-light {
@@ -570,7 +575,7 @@ a { color: var(--primary); }
 }
 .print-preview-table td, .device-label-table td {
   border: 1px solid #000; padding: 2px; color: #000;
-  font-family: 'Times New Roman', Times, serif; font-size: 20px; line-height: 1.4;
+  font-family: 'Tinos', serif; font-size: 20px; line-height: 1.4;
   overflow: hidden;
 }
 .preview-logo-cell { width: 25%; text-align: center; vertical-align: middle; background: #fff; }
@@ -593,14 +598,14 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
 .tem-12 { height: 12mm; width: 36mm; }
 .tem-12.tem-12-qr-only { width: 30mm; border: 0; }
 .tem-left { position: relative; flex: 0 0 31%; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 1.6mm 1.2mm 1.1mm; border-right: 2px solid #1a1d23; background: linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%); }
-.tem-brand { display: flex; align-items: center; justify-content: center; gap: 1.7mm; color: #0c3d7a; font: 800 9px 'Segoe UI', Arial, sans-serif; letter-spacing: -.15px; margin-bottom: 1.4mm; white-space: nowrap; }
-.tem-brand-mark { display: inline-grid; place-items: center; width: 4.8mm; height: 4.8mm; border: 2px solid #0c3d7a; border-radius: 50%; font: 800 7px 'Segoe UI', Arial, sans-serif; line-height: 1; color: #0c3d7a; background: rgba(12, 61, 122, .04); }
+.tem-brand { display: flex; align-items: center; justify-content: center; gap: 1.7mm; color: #0c3d7a; font: 800 9px var(--font-body); letter-spacing: -.15px; margin-bottom: 1.4mm; white-space: nowrap; }
+.tem-brand-mark { display: inline-grid; place-items: center; width: 4.8mm; height: 4.8mm; border: 2px solid #0c3d7a; border-radius: 50%; font: 800 7px var(--font-body); line-height: 1; color: #0c3d7a; background: rgba(12, 61, 122, .04); }
 .tem .qr { display: flex; align-items: center; justify-content: center; width: 100%; padding-top: .5mm; }
 .tem .qr canvas { display: block; margin: 0 auto; border: 1px solid rgba(18, 24, 33, .15); background: #fff; padding: 1px; }
 .tem-24 .qr canvas { width: 17mm !important; height: 17mm !important; }
 .tem-12 .qr canvas { width: 8mm !important; height: 8mm !important; }
 .tem .info { min-width: 0; flex: 1; overflow: hidden; line-height: 1; background: #fff; }
-.label-line { display: grid; grid-template-columns: 38% 62%; min-height: 6.2mm; border-bottom: 1px solid #1a1d23; font-family: 'Segoe UI', Arial, sans-serif; }
+.label-line { display: grid; grid-template-columns: 38% 62%; min-height: 6.2mm; border-bottom: 1px solid #1a1d23; font-family: var(--font-body); }
 .label-line:last-child { border-bottom: 0; }
 .label-line b, .label-line span { padding: 1.1mm 1.8mm; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; }
 .label-line b { font-size: 6.3px; font-weight: 700; border-right: 1px solid #1a1d23; color: #111827; background: rgba(12, 61, 122, .02); }
@@ -773,24 +778,24 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
 /* ==========================================================================
    Phiếu bàn giao thiết bị (A4)
    ========================================================================== */
-.hv-sheet { width: 194mm; display: flex; flex-direction: column; box-sizing: border-box; background: #fff; color: #000; font: 9pt/1.25 Arial, Helvetica, sans-serif; }
+.hv-sheet { width: 194mm; display: flex; flex-direction: column; box-sizing: border-box; background: #fff; color: #000; font: 9pt/1.25 var(--font-print-sans); }
 .hv-sheet table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .hv-sheet th, .hv-sheet td { border: .35mm solid #000; padding: .9mm 1.6mm; vertical-align: middle; word-break: break-word; }
-.hv-sheet th { font: 700 9pt 'Times New Roman', Times, serif; text-align: center; }
+.hv-sheet th { font: 700 9pt var(--font-print-serif); text-align: center; }
 .hv-center { text-align: center; }
 .hv-vi { display: block; color: #2f6fb5; font-style: italic; font-weight: 400; font-size: 8pt; line-height: 1.15; }
 .hv-vi-inline { color: #2f6fb5; }
 .hv-head { display: grid; grid-template-columns: 40mm 1fr 44mm; align-items: center; padding-bottom: 1.5mm; }
 .hv-head img { width: 27mm; display: block; }
 .hv-title { text-align: center; }
-.hv-title h1 { margin: 0; font: 400 16pt/1.15 'Times New Roman', Times, serif; letter-spacing: .2px; }
-.hv-title p { margin: 0; font: italic 400 15pt/1.15 'Times New Roman', Times, serif; color: #2f6fb5; }
+.hv-title h1 { margin: 0; font: 400 16pt/1.15 var(--font-print-serif); letter-spacing: .2px; }
+.hv-title p { margin: 0; font: italic 400 15pt/1.15 var(--font-print-serif); color: #2f6fb5; }
 .hv-formno { text-align: right; font-size: 7pt; align-self: start; }
 .hv-reg { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5mm; font-size: 9pt; }
 .hv-no { padding: .6mm 0; text-align: right; }
 .hv-info th { text-align: center; }
 .hv-info td { height: 9mm; }
-.hv-band { border: .35mm solid #000; border-bottom: 0; margin-top: 2.5mm; text-align: center; font: 700 9.5pt 'Times New Roman', Times, serif; padding: .8mm 0; }
+.hv-band { border: .35mm solid #000; border-bottom: 0; margin-top: 2.5mm; text-align: center; font: 700 9.5pt var(--font-print-serif); padding: .8mm 0; }
 .hv-band-gap { margin-top: 3mm; }
 .hv-details th { background: #fff; }
 /* Dùng chiều cao cố định trên chính <tr> (không co giãn theo flex) — bảng này có 2 dòng gộp ô dọc
@@ -799,7 +804,7 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
 .hv-details { flex: 0 0 auto; }
 .hv-details tr { height: 5.6mm; }
 .hv-details th, .hv-details td { padding-top: .4mm; padding-bottom: .4mm; }
-.hv-sub { font-family: Arial, Helvetica, sans-serif; }
+.hv-sub { font-family: var(--font-print-sans); }
 .hv-policy th { font-size: 9pt; }
 .hv-policy td { padding: 1mm 1.6mm; font-size: 8.4pt; }
 .hv-policy ul { margin: 0; padding: 0; list-style: none; }
@@ -809,14 +814,14 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
 .hv-signs table { height: 100%; }
 .hv-info, .hv-policy { flex: 1 1 auto; }
 .hv-signs table { border: 0; }
-.hv-sign-title { font: 700 10pt 'Times New Roman', Times, serif; letter-spacing: .3px; }
-.hv-signs thead th { font: 400 8.6pt 'Times New Roman', Times, serif; }
-.hv-signs thead .hv-sign-title { font: 700 10pt 'Times New Roman', Times, serif; }
+.hv-sign-title { font: 700 10pt var(--font-print-serif); letter-spacing: .3px; }
+.hv-signs thead th { font: 400 8.6pt var(--font-print-serif); }
+.hv-signs thead .hv-sign-title { font: 700 10pt var(--font-print-serif); }
 .hv-sign-space td { height: 26mm; }
-.hv-resigned { margin-top: 3mm; font: 700 9pt 'Times New Roman', Times, serif; text-decoration: underline; }
+.hv-resigned { margin-top: 3mm; font: 700 9pt var(--font-print-serif); text-decoration: underline; }
 .hv-signs-resigned { margin-top: 1.5mm; }
 .hv-resigned-space td { height: 26mm; vertical-align: bottom; text-align: left; }
-.hv-date { font: 400 8.5pt 'Times New Roman', Times, serif; }
+.hv-date { font: 400 8.5pt var(--font-print-serif); }
 
 .hv-modal { width: min(1180px, calc(100vw - 32px)); max-height: 92vh; padding: 0; display: flex; flex-direction: column; overflow: hidden; }
 .hv-modal .modal-header, .hv-modal .modal-footer { flex: none; }
@@ -911,9 +916,9 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
 .hv-attach-sheet { justify-content: flex-start; }
 .hv-attach-table { margin-top: 4mm; }
 .hv-attach-table th, .hv-attach-table td { border: .35mm solid #000; padding: 1.3mm 1.8mm; font-size: 9pt; }
-.hv-attach-table th { font: 700 9pt 'Times New Roman', Times, serif; background: #fff; }
-.hv-attach-table td { font-family: Arial, Helvetica, sans-serif; }
-.hv-attach-table td.mono { font-family: 'Courier New', Courier, monospace; letter-spacing: .2px; }
+.hv-attach-table th { font: 700 9pt var(--font-print-serif); background: #fff; }
+.hv-attach-table td { font-family: var(--font-print-sans); }
+.hv-attach-table td.mono { font-family: var(--font-mono); letter-spacing: .2px; }
 .hv-attach-table tbody tr:nth-child(even) td { background: #f7f9fc; }
 
 /* ==========================================================================
@@ -999,3 +1004,71 @@ td.preview-qr-cell { height: 125px; padding: 1px; vertical-align: middle; backgr
 }
 
 .field-hint { display: block; margin: -6px 0 12px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+/* Trang Mượn thiết bị: nhãn trạng thái (đang mượn/quá hạn/đã trả) và khung vẽ chữ ký. */
+.loan-status { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.loan-status-borrowed { background: var(--primary-soft); color: var(--primary); }
+.loan-status-overdue { background: rgba(217, 69, 69, .14); color: var(--danger); }
+.loan-status-returned { background: var(--panel-soft); color: var(--ink-soft); }
+
+/* Hàng tóm tắt số lượng theo trạng thái — nhìn 1 cái biết ngay có bao nhiêu phiếu quá hạn mà không cần đếm thủ công
+   trong bảng; bấm vào 1 ô thì lọc bảng luôn theo đúng trạng thái đó (giống bấm tab trạng thái bên dưới). */
+.loan-stats-row { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.loan-stat {
+  display: flex; align-items: baseline; gap: 8px; padding: 10px 18px; border-radius: var(--radius-md);
+  border: 1.5px solid var(--line); background: var(--panel); cursor: pointer; min-width: 120px;
+}
+.loan-stat b { font-size: 22px; font-family: var(--font-mono); }
+.loan-stat span { font-size: 12.5px; color: var(--ink-soft); font-weight: 600; }
+.loan-stat.active { border-color: currentColor; }
+.loan-stat.loan-status-borrowed { color: var(--primary); }
+.loan-stat.loan-status-overdue { color: var(--danger); }
+.loan-stat.loan-status-returned { color: var(--ink-soft); }
+.loan-stat b, .loan-stat span { color: inherit; }
+
+/* Tô nhẹ cả dòng quá hạn trong bảng — dễ lướt mắt thấy ngay cần nhắc ai, không phải nhìn kỹ từng nhãn trạng thái
+   nhỏ ở cuối dòng mới biết. */
+.inventory-table tbody tr.loan-row-overdue td { background: rgba(217, 69, 69, .06); }
+.inventory-table tbody tr.loan-row-overdue:hover td:not(.loan-action-col) { background: rgba(217, 69, 69, .12); }
+
+.sig-pad-wrap { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+/* Chiều cao rộng hơn bình thường (so với 1 ô form) — dùng chủ yếu trên tablet/cảm ứng, ký bằng ngón tay cần nhiều
+   chỗ hơn ký bằng chuột. touch-action: none chặn trình duyệt tự cuộn trang khi đang kéo ngón tay trên khung ký. */
+.sig-pad-canvas { width: 100%; height: 180px; border: 1.5px dashed var(--line); border-radius: var(--radius-sm); background: #fff; cursor: crosshair; touch-action: none; }
+.sig-pad-clear { font-size: 12px; padding: 5px 12px; }
+
+/* Thiết bị cho mượn chưa có trong hệ thống (chưa đồng bộ GLPI, đồ phụ kiện lặt vặt...) — form nhập tay gọn, 2 ô +
+   nút Thêm/Đóng, đủ lớn để bấm thoải mái trên tablet. */
+.loan-device-add-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.loan-manual-form { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-soft); }
+/* Ô tên thiết bị/ghi chú nhập tay — nhỏ gọn hơn ô form-control thường (40px cao, chữ 13px) vì chỉ gõ 1 cụm ngắn,
+   không cần to như các ô chính của phiếu. */
+.loan-manual-form input.form-control { min-height: 30px; padding: 5px 9px; font-size: 12px; }
+.loan-manual-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* Gợi ý nhanh vài món hay cho mượn kèm (chuột, máy chiếu...) — bấm thêm thẳng, không cần gõ tay từng cái. */
+.loan-preset-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.loan-preset-chip { font-size: 10.5px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--ink-soft); cursor: pointer; }
+.loan-preset-chip:hover { border-color: var(--primary); color: var(--primary); }
+
+/* Ô họ tên người mượn gõ tới đâu gợi ý tới đó từ Active Directory — dropdown nổi ngay dưới ô (label cha đã có
+   position: relative sẵn, xem .hv-fields label), không cần thêm 1 lớp định vị riêng. */
+.loan-borrower-field { position: relative; }
+.loan-borrower-suggest {
+  position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px; z-index: 6;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: var(--shadow-lg);
+  max-height: 220px; overflow: auto; display: flex; flex-direction: column; gap: 2px; padding: 4px;
+}
+.loan-borrower-suggest-row { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; text-align: left; border: 0; background: transparent; border-radius: 6px; padding: 6px 8px; cursor: pointer; }
+.loan-borrower-suggest-row:hover { background: var(--primary-soft); }
+.loan-borrower-suggest-row b { font-size: 12.5px; }
+.loan-borrower-suggest-row small { color: var(--ink-soft); font-size: 11px; }
+.loan-borrower-suggest-empty { color: var(--muted); font-size: 12px; padding: 8px; text-align: center; }
+
+/* Ảnh chữ ký đã lưu — hiện trong khung soạn phiếu (xem lại/in lại) và trong bảng in (LoanSheet). */
+.loan-sig-img { max-width: 90%; max-height: 24mm; object-fit: contain; }
+
+/* Bảng Mượn thiết bị không có cột checkbox chọn dòng (khác Thiết bị/Phiếu bàn giao) nên ô "Thao tác" chính là
+   cột đầu tiên — .action-col mặc định chừa sẵn 62px bên trái cho cột checkbox đó (left: 62px, xem phía trên),
+   không có cột đó thì để nguyên sẽ hở ra 1 khoảng trống 62px vô nghĩa ở mép trái khi cuộn ngang. Ghim lại về left: 0. */
+.inventory-table th.loan-action-col, .inventory-table td.loan-action-col { left: 0; }
+.loan-sig-saved { border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fff; padding: 4px; }

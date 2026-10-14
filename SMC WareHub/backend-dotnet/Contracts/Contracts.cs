@@ -11,6 +11,9 @@ public sealed record UserUpdateRequest(string? FullName, string? Role, bool? IsA
 public sealed record LdapAddRequest(string? Username, string? FullName, string Role = "staff");
 public sealed record HandoverRequest(int? DeviceId, DateOnly? RegisterDate, string? FullName, JsonElement? Data = null, string? No = null);
 public sealed record HandoverUpdateRequest(string? FullName, JsonElement? Data = null, string? No = null);
+public sealed record DeviceLoanRequest(string? BorrowerName, string? Department, string? EmployeeId, string? CostCenter, DateTime? BorrowedAt, DateTime? DueAt, string? Signature, JsonElement? Data = null, string? No = null);
+public sealed record DeviceLoanUpdateRequest(string? BorrowerName, string? Department, string? EmployeeId, string? CostCenter, DateTime? DueAt, JsonElement? Data = null);
+public sealed record DeviceLoanReturnRequest(DateTime? ReturnedAt);
 public sealed record PrintRequest([property: JsonPropertyName("deviceIds")] int[]? DeviceIds);
 public sealed record ApiKeyCreateRequest(string? Name, string[]? Scopes);
 

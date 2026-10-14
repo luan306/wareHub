@@ -63,7 +63,7 @@ function FitText({ text }) {
 const PRINT_TEXT_MAX = 11;
 const PRINT_TEXT_MIN = 6.5;
 const PRINT_TEXT_WIDTH_PX = 95; // cột giá trị 26.8mm trừ lề
-const TAG_FONT_FAMILY = "'Times New Roman', Times, serif"; // phải trùng font-family của .device-label-table td trong CSS
+const TAG_FONT_FAMILY = "'Tinos', serif"; // phải trùng font-family của .device-label-table td trong CSS
 // Chừa biên: bản in dàn chữ ở độ phân giải máy in và có thể lệch một chút so với số đo trên màn hình.
 const FIT_MARGIN = 0.94;
 
