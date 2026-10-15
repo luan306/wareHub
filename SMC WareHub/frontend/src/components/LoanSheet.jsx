@@ -388,6 +388,7 @@ export function LoanModal({ saved, onClose }) {
       borrower_name: match.full_name,
       employee_id: match.employee_id || current.employee_id,
       department: current.department || match.department || current.department,
+      cost_center: current.cost_center || match.cost_center || current.cost_center,
     }));
     setNotice(t('loan.ldapPicked', { name: match.full_name }));
   }

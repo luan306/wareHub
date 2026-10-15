@@ -27,6 +27,13 @@ export function Users() {
   const [ldapBulkRole, setLdapBulkRole] = useState('staff');
   const [ldapAdding, setLdapAdding] = useState(false);
 
+  const [importOpen, setImportOpen] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importError, setImportError] = useState('');
+  const [importResult, setImportResult] = useState(null);
+  const [importFileInputKey, setImportFileInputKey] = useState(0);
+
   const fetchUsers = useCallback(async () => {
     try {
       const data = await api.get('/users');
@@ -90,6 +97,29 @@ export function Users() {
     setLdapSelected(all ? new Set() : new Set((ldapResults || []).map((r) => r.username)));
   }
 
+  function openImportModal() {
+    setImportFile(null); setImportError(''); setImportResult(null);
+    setImportOpen(true);
+  }
+
+  async function handleImportSubmit(e) {
+    e.preventDefault();
+    if (!importFile) return;
+    setImportError(''); setImportResult(null); setImportBusy(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', importFile);
+      const result = await api.postFile('/employees/cost-centers/import', formData);
+      setImportResult(result);
+      setImportFile(null);
+      setImportFileInputKey((key) => key + 1);
+    } catch (err) {
+      setImportError(err.message);
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
   async function handleLdapBulkAdd() {
     if (ldapSelected.size === 0) return;
     setLdapError(''); setLdapAdding(true);
@@ -150,6 +180,7 @@ export function Users() {
       <div className="page-head">
         <h2>{t('users.title')}</h2>
         <div className="row-actions">
+          <button onClick={openImportModal}>{t('users.importCostCenter')}</button>
           <button onClick={openLdapModal}>{t('users.addLdap')}</button>
           <button className="btn-primary" onClick={openCreateModal}>{t('users.add')}</button>
         </div>
@@ -316,6 +347,43 @@ export function Users() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {importOpen && (
+        <div className="modal-backdrop" onClick={() => setImportOpen(false)}>
+          <form className="modal-card" onClick={(e) => e.stopPropagation()} onSubmit={handleImportSubmit}>
+            <h3>{t('users.importCostCenterTitle')}</h3>
+            <a className="field-hint" href="/samples/cost-center-sample.xlsx" download>{t('users.importCostCenterSample')}</a>
+
+            <label>{t('users.importCostCenterPick')}</label>
+            <input
+              key={importFileInputKey}
+              type="file"
+              accept=".xlsx"
+              onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+              required
+            />
+
+            {importError && <div className="error-box">{importError}</div>}
+            {importResult && (
+              <div className="notice-box">
+                {t('users.importCostCenterDone', { imported: importResult.imported, skipped: importResult.skipped })}
+                {importResult.numeric_id_rows?.length > 0 && (
+                  <div className="field-hint">
+                    {t('users.importCostCenterNumericWarning', { rows: importResult.numeric_id_rows.join(', ') })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="modal-actions">
+              <button type="button" onClick={() => setImportOpen(false)}>{t('common.cancel')}</button>
+              <button type="submit" className="btn-primary" disabled={importBusy || !importFile}>
+                {importBusy ? t('users.importCostCenterImporting') : t('users.importCostCenterSubmit')}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

@@ -37,8 +37,8 @@ public sealed class LdapService(IOptions<LdapOptions> options, ILogger<LdapServi
 
         var filter = string.IsNullOrWhiteSpace(query)
             ? "(&(objectCategory=person)(objectClass=user))"
-            : $"(&(objectCategory=person)(objectClass=user)(|(cn=*{EscapeFilter(query)}*)(sAMAccountName=*{EscapeFilter(query)}*)(employeeID=*{EscapeFilter(query)}*)))";
-        var request = new SearchRequest(_options.BaseDn, filter, SearchScope.Subtree, "cn", "sAMAccountName", "mail", "department", "employeeID");
+            : $"(&(objectCategory=person)(objectClass=user)(|(cn=*{EscapeFilter(query)}*)(sAMAccountName=*{EscapeFilter(query)}*)(employeeNumber=*{EscapeFilter(query)}*)))";
+        var request = new SearchRequest(_options.BaseDn, filter, SearchScope.Subtree, "cn", "sAMAccountName", "mail", "department", "employeeNumber", "givenName", "sn");
         request.SizeLimit = MaxResults;
         var response = (SearchResponse)connection.SendRequest(request);
 
@@ -46,10 +46,14 @@ public sealed class LdapService(IOptions<LdapOptions> options, ILogger<LdapServi
         foreach (SearchResultEntry entry in response.Entries)
         {
             var username = entry.Attributes["sAMAccountName"]?[0]?.ToString();
-            var fullName = entry.Attributes["cn"]?[0]?.ToString();
+            var givenName = entry.Attributes["givenName"]?.Count > 0 ? entry.Attributes["givenName"][0]?.ToString() : null;
+            var surname = entry.Attributes["sn"]?.Count > 0 ? entry.Attributes["sn"][0]?.ToString() : null;
+            var fullName = !string.IsNullOrWhiteSpace(givenName) && !string.IsNullOrWhiteSpace(surname)
+                ? $"{givenName} {surname}"
+                : entry.Attributes["cn"]?[0]?.ToString();
             var email = entry.Attributes["mail"]?.Count > 0 ? entry.Attributes["mail"][0]?.ToString() : null;
             var department = entry.Attributes["department"]?.Count > 0 ? entry.Attributes["department"][0]?.ToString() : null;
-            var employeeId = entry.Attributes["employeeID"]?.Count > 0 ? entry.Attributes["employeeID"][0]?.ToString() : null;
+            var employeeId = entry.Attributes["employeeNumber"]?.Count > 0 ? entry.Attributes["employeeNumber"][0]?.ToString() : null;
             if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(fullName))
                 results.Add(new LdapUserMatch(username, fullName, email, department, employeeId));
         }

@@ -6,7 +6,9 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using ClosedXML.Excel;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
@@ -661,7 +663,7 @@ handovers.MapDelete("/{id:int}", async (int id, WareHubDbContext db) =>
 }).RequireAuthorization("admin");
 
 var loans = app.MapGroup("/api/loans").RequireAuthorization();
-loans.MapGet("/ldap-search", async (string? q, LdapService ldap, CancellationToken ct) =>
+loans.MapGet("/ldap-search", async (string? q, LdapService ldap, WareHubDbContext db, CancellationToken ct) =>
 {
     var query = q?.Trim();
     if (query?.Length == 1) return Results.BadRequest(new { error = "Nhập ít nhất 2 ký tự để tìm" });
@@ -669,9 +671,17 @@ loans.MapGet("/ldap-search", async (string? q, LdapService ldap, CancellationTok
     List<LdapUserMatch> matches;
     try { matches = await ldap.SearchUsersAsync(query, ct); }
     catch (Exception ex) when (ex is LdapException or InvalidOperationException) { return Results.BadRequest(new { error = $"Không kết nối được LDAP: {ex.Message}" }); }
+    var employeeIds = matches.Where(m => !string.IsNullOrWhiteSpace(m.EmployeeId)).Select(m => m.EmployeeId!).Distinct().ToList();
+    var costCenters = employeeIds.Count == 0 ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        : await db.EmployeeCostCenters.AsNoTracking().Where(x => employeeIds.Contains(x.EmployeeId))
+            .ToDictionaryAsync(x => x.EmployeeId, x => x.CostCenter, StringComparer.OrdinalIgnoreCase, ct);
     return Results.Ok(new
     {
-        results = matches.Select(m => new { username = m.Username, full_name = m.FullName, email = m.Email, department = m.Department, employee_id = m.EmployeeId }),
+        results = matches.Select(m => new
+        {
+            username = m.Username, full_name = m.FullName, email = m.Email, department = m.Department, employee_id = m.EmployeeId,
+            cost_center = m.EmployeeId != null && costCenters.TryGetValue(m.EmployeeId, out var cc) ? cc : null,
+        }),
         truncated = matches.Count >= LdapService.MaxResults,
     });
 });
@@ -770,6 +780,80 @@ loans.MapDelete("/{id:int}", async (int id, WareHubDbContext db) =>
     await db.SaveChangesAsync();
     return Results.Ok(new { ok = true });
 }).RequireAuthorization("admin");
+
+var employees = app.MapGroup("/api/employees").RequireAuthorization("admin");
+employees.MapGet("/cost-centers/count", async (WareHubDbContext db) => Results.Ok(new { count = await db.EmployeeCostCenters.CountAsync() }));
+employees.MapPost("/cost-centers/import", async (HttpRequest request, WareHubDbContext db) =>
+{
+    request.HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>()!.MaxRequestBodySize = 8_388_608;
+    if (!request.HasFormContentType) return Results.BadRequest(new { error = "Thiếu file" });
+    var form = await request.ReadFormAsync();
+    var file = form.Files.GetFile("file");
+    if (file is null || file.Length == 0) return Results.BadRequest(new { error = "Thiếu file" });
+    if (file.Length > 8_388_608) return Results.BadRequest(new { error = "File quá lớn (tối đa 8MB)" });
+    if (!file.FileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+        return Results.BadRequest(new { error = "Chỉ nhận file .xlsx" });
+
+    List<(string EmployeeId, string? FullName, string CostCenter)> rows;
+    List<int> numericIdRows;
+    try
+    {
+        using var stream = file.OpenReadStream();
+        using var workbook = new XLWorkbook(stream);
+        if (!workbook.Worksheets.Any()) return Results.BadRequest(new { error = "File không có sheet nào" });
+        var sheet = workbook.Worksheets.First();
+        var headerRow = sheet.FirstRowUsed();
+        if (headerRow is null) return Results.BadRequest(new { error = "File rỗng" });
+        int? employeeIdCol = null, fullNameCol = null, costCenterCol = null;
+        foreach (var cell in headerRow.CellsUsed())
+        {
+            var header = cell.GetString().Trim().ToLowerInvariant().Replace(" ", "");
+            if (header is "msnv" or "employeeid" or "mnv") employeeIdCol = cell.Address.ColumnNumber;
+            else if (header is "fullname" or "hoten" or "name") fullNameCol = cell.Address.ColumnNumber;
+            else if (header is "costcenter") costCenterCol = cell.Address.ColumnNumber;
+        }
+        if (employeeIdCol is null || costCenterCol is null)
+            return Results.BadRequest(new { error = "Thiếu cột MSNV hoặc CostCenter trong file (dòng đầu phải có tiêu đề cột)" });
+
+        rows = new();
+        numericIdRows = new();
+        foreach (var row in sheet.RowsUsed().Skip(1))
+        {
+            var idCell = row.Cell(employeeIdCol.Value);
+            var employeeId = idCell.GetString().Trim();
+            if (string.IsNullOrWhiteSpace(employeeId)) continue;
+            var costCenter = row.Cell(costCenterCol.Value).GetString().Trim();
+            if (string.IsNullOrWhiteSpace(costCenter)) continue;
+            var fullName = fullNameCol.HasValue ? row.Cell(fullNameCol.Value).GetString().Trim() : null;
+            // Cột MSNV lưu dạng số (không phải Text) nghĩa là Excel đã tự bỏ số 0 đầu trước khi tới đây —
+            // không thể khôi phục, chỉ báo lại dòng nào để người import tự kiểm tra và sửa trong file gốc.
+            if (idCell.DataType == XLDataType.Number) numericIdRows.Add(row.RowNumber());
+            rows.Add((Truncate(employeeId, 50)!, Truncate(fullName, 100), Truncate(costCenter, 50)!));
+        }
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = $"Không đọc được file Excel: {ex.Message}" });
+    }
+    if (rows.Count == 0) return Results.BadRequest(new { error = "Không có dòng dữ liệu hợp lệ trong file" });
+
+    var deduped = rows.GroupBy(r => r.EmployeeId, StringComparer.OrdinalIgnoreCase).Select(g => g.Last()).ToList();
+    var now = DateTime.Now;
+    var strategy = db.Database.CreateExecutionStrategy();
+    await strategy.ExecuteAsync(async () =>
+    {
+        await using var tx = await db.Database.BeginTransactionAsync();
+        await db.Database.ExecuteSqlRawAsync("DELETE FROM employee_cost_centers");
+        foreach (var batch in deduped.Chunk(500))
+        {
+            db.EmployeeCostCenters.AddRange(batch.Select(r => new EmployeeCostCenter { EmployeeId = r.EmployeeId, FullName = r.FullName, CostCenter = r.CostCenter, ImportedAt = now }));
+            await db.SaveChangesAsync();
+            db.ChangeTracker.Clear();
+        }
+        await tx.CommitAsync();
+    });
+    return Results.Ok(new { imported = deduped.Count, skipped = rows.Count - deduped.Count, numeric_id_rows = numericIdRows });
+});
 
 var qr = app.MapGroup("/api/qr").RequireAuthorization();
 qr.MapGet("/devices/{deviceId:int}", async (int deviceId, int? size, WareHubDbContext db) =>
@@ -1151,6 +1235,7 @@ static async Task EnsureSchemaAsync(WareHubDbContext db)
     await EnsureIndexAsync(db, "handovers", "IX_handovers_CreatedAt", "`created_at`");
     await EnsureDeviceLoanTableAsync(db);
     await EnsureIndexAsync(db, "device_loans", "IX_device_loans_CreatedAt", "`created_at`");
+    await EnsureEmployeeCostCenterTableAsync(db);
     await db.Database.ExecuteSqlRawAsync("UPDATE devices SET is_active = 1 WHERE is_active = 0");
     await EnsureIndexDroppedAsync(db, "devices", "idx_devices_loai");
     await EnsureIndexDroppedAsync(db, "devices", "idx_devices_phong_ban");
@@ -1272,6 +1357,19 @@ static async Task EnsureDeviceLoanTableAsync(WareHubDbContext db)
         await db.Database.ExecuteSqlRawAsync("ALTER TABLE device_loans ADD COLUMN employee_id VARCHAR(50) NULL AFTER department");
     if (!await ColumnExistsAsync(db, "device_loans", "cost_center"))
         await db.Database.ExecuteSqlRawAsync("ALTER TABLE device_loans ADD COLUMN cost_center VARCHAR(50) NULL AFTER employee_id");
+}
+static async Task EnsureEmployeeCostCenterTableAsync(WareHubDbContext db)
+{
+    await db.Database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS employee_cost_centers (
+            Id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            employee_id VARCHAR(50) NOT NULL,
+            full_name VARCHAR(100) NULL,
+            cost_center VARCHAR(50) NOT NULL,
+            imported_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            UNIQUE INDEX IX_employee_cost_centers_employee_id (`employee_id`)
+        )
+        """);
 }
 static async Task EnsureHandoverKindColumnAsync(WareHubDbContext db)
 {

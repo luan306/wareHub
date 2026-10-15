@@ -9,7 +9,7 @@ function getToken() {
   return localStorage.getItem('token');
 }
 
-async function request(path, { method = 'GET', body, params } = {}) {
+async function request(path, { method = 'GET', body, params, formData, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   let url = `${BASE}${path}`;
   if (params) {
     const qs = new URLSearchParams(
@@ -18,17 +18,17 @@ async function request(path, { method = 'GET', body, params } = {}) {
     if (qs) url += `?${qs}`;
   }
 
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = formData ? {} : { 'Content-Type': 'application/json' };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
   let res;
   try {
     res = await fetchWithTimeout(url, {
-      timeoutMs: REQUEST_TIMEOUT_MS,
+      timeoutMs,
       method,
       headers,
-      body: body ? JSON.stringify(body) : undefined,
+      body: formData || (body ? JSON.stringify(body) : undefined),
     });
   } catch {
     connectionEvents.emit({ type: 'unreachable' });
@@ -66,4 +66,5 @@ export const api = {
   post: (path, body) => request(path, { method: 'POST', body }),
   put: (path, body) => request(path, { method: 'PUT', body }),
   del: (path) => request(path, { method: 'DELETE' }),
+  postFile: (path, formData) => request(path, { method: 'POST', formData, timeoutMs: 60000 }),
 };

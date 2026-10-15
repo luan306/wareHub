@@ -11,6 +11,7 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
     public DbSet<Handover> Handovers => Set<Handover>();
     public DbSet<DeviceLoan> DeviceLoans => Set<DeviceLoan>();
     public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
+    public DbSet<EmployeeCostCenter> EmployeeCostCenters => Set<EmployeeCostCenter>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -93,6 +94,15 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
             entity.Property(x => x.Scopes).HasMaxLength(200).IsRequired();
             entity.Property(x => x.CreatedByName).HasMaxLength(100);
             entity.Property(x => x.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP(6)").ValueGeneratedOnAdd();
+        });
+        modelBuilder.Entity<EmployeeCostCenter>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.EmployeeId).HasMaxLength(50).IsRequired();
+            entity.HasIndex(x => x.EmployeeId).IsUnique();
+            entity.Property(x => x.FullName).HasMaxLength(100);
+            entity.Property(x => x.CostCenter).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.ImportedAt).HasDefaultValueSql("CURRENT_TIMESTAMP(6)").ValueGeneratedOnAdd();
         });
         modelBuilder.Entity<DeviceHistory>(entity =>
         {

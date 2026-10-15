@@ -130,7 +130,7 @@ export function Loans() {
   function deviceSummary(item) {
     const devices = item.data?.devices || [];
     if (devices.length === 0) return '—';
-    const names = devices.map((d) => d.ma).join(', ');
+    const names = devices.map((d) => d.ma || d.ten).join(', ');
     return names;
   }
 

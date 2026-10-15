@@ -103,6 +103,16 @@ public sealed class DeviceLoan
     [Column("created_at")] public DateTime CreatedAt { get; set; }
 }
 
+[Table("employee_cost_centers")]
+public sealed class EmployeeCostCenter
+{
+    public int Id { get; set; }
+    [Column("employee_id")] public string EmployeeId { get; set; } = "";
+    [Column("full_name")] public string? FullName { get; set; }
+    [Column("cost_center")] public string CostCenter { get; set; } = "";
+    [Column("imported_at")] public DateTime ImportedAt { get; set; }
+}
+
 [Table("handovers")]
 public sealed class Handover
 {
