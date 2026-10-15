@@ -1,4 +1,3 @@
-// Tên tiếng Việt của từng loại thiết bị (khoá khớp với cột loai ở backend) — dùng cho biểu mẫu in; giao diện dùng khoá dịch loai.<khoá>.
 export const LOAI_LABELS = {
   laptop: 'Laptop',
   desktop: 'Máy bàn',
@@ -10,7 +9,6 @@ export const LOAI_LABELS = {
   other: 'Khác',
 };
 
-// Tên tiếng Anh — phiếu bàn giao (ATTACHED EQUIPMENT LIST) in toàn tiếng Anh, không dùng LOAI_LABELS (tiếng Việt) ở đây.
 export const LOAI_LABELS_EN = {
   laptop: 'Laptop',
   desktop: 'Desktop',

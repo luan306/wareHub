@@ -12,8 +12,6 @@ import { Loans } from './pages/Loans';
 import { DeviceHistory } from './pages/DeviceHistory';
 import { Users } from './pages/Users';
 
-// Đã đăng nhập rồi mà gõ thẳng /login (hoặc bấm Back) thì đưa luôn về trang chính — không hiện lại form đăng nhập
-// (dễ gây tưởng nhầm cần đăng nhập lại, hoặc lỡ tay đăng nhập đè bằng tài khoản khác giữa chừng).
 function LoginRoute() {
   const { user } = useAuth();
   return user ? <Navigate to="/thiet-bi" replace /> : <Login />;

@@ -3,7 +3,6 @@ import { ApiError, connectionEvents } from './connection';
 import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 
 const BASE = '/api';
-// Quá thời gian này mà máy chủ không trả lời thì coi như mất kết nối (tránh nút bấm treo mãi khi mạng chập chờn).
 const REQUEST_TIMEOUT_MS = 30000;
 
 function getToken() {
@@ -32,13 +31,10 @@ async function request(path, { method = 'GET', body, params } = {}) {
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch {
-    // Không tới được máy chủ: mất mạng, máy chủ đang tắt/khởi động lại, hoặc quá thời gian chờ.
     connectionEvents.emit({ type: 'unreachable' });
     throw new ApiError(translate('error.network'), { code: 'network' });
   }
 
-  // 401 từ chính endpoint đăng nhập nghĩa là sai tài khoản/mật khẩu, không phải phiên hết hạn —
-  // để rơi xuống nhánh bên dưới hiện đúng lỗi từ server, không tự redirect/xoá phiên.
   if (res.status === 401 && path !== '/auth/login') {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
@@ -49,12 +45,10 @@ async function request(path, { method = 'GET', body, params } = {}) {
   const isJson = (res.headers.get('content-type') || '').includes('json');
   const data = isJson ? await res.json().catch(() => ({})) : {};
 
-  // Máy chủ đang ở chế độ bảo trì (backend trả 503 kèm maintenance: true).
   if (res.status === 503 && data.maintenance) {
     connectionEvents.emit({ type: 'maintenance', message: data.error, until: data.until });
     throw new ApiError(translateServerMessage(data.error), { status: 503, code: 'maintenance' });
   }
-  // Lỗi 5xx không phải JSON của ứng dụng = cổng/proxy báo backend không phản hồi (đang tắt hoặc khởi động lại).
   if (!res.ok && !isJson && res.status >= 500) {
     connectionEvents.emit({ type: 'unreachable' });
     throw new ApiError(translate('error.network'), { status: res.status, code: 'network' });

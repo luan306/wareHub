@@ -2,8 +2,6 @@ import { useAuth } from '../context/AuthContext';
 import { useConnection } from '../context/ConnectionContext';
 import { translateServerMessage, useT } from '../i18n';
 
-// Thanh cảnh báo mất mạng, thông báo "đã kết nối lại", gợi ý tải lại khi có phiên bản mới,
-// và màn hình chắn khi không tới được máy chủ / máy chủ đang bảo trì.
 export function ConnectionStatus() {
   const { t, locale } = useT();
   const { user } = useAuth();

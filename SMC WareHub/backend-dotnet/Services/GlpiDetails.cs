@@ -10,7 +10,6 @@ public sealed record GlpiComputerDetails(string? Cpu, string? Ram, string? Stora
     public bool HasAny => Cpu is not null || Ram is not null || Storage is not null || Ip is not null || Windows is not null || Office is not null;
 }
 
-/// <summary>Gom cảnh báo trong 1 lần đồng bộ chi tiết (mỗi nguồn báo 1 lần, không lặp lại cho từng máy).</summary>
 public sealed class GlpiDetailReport
 {
     private readonly ConcurrentDictionary<string, string> _warnings = new();
@@ -26,24 +25,14 @@ public sealed record GlpiPhoneDetails(string? PhoneNumber, string? SimSerial)
 public sealed record GlpiProbeResult(string? SpecUrl, IReadOnlyDictionary<string, string?> Endpoints, IReadOnlyList<GlpiProbeCall> Calls, GlpiComputerDetails Parsed);
 public sealed record GlpiProbeCall(string Source, string? Url, int Status, string Preview);
 
-/// <summary>
-/// Lấy chi tiết từng máy tính từ GLPI: các bộ phận (bộ xử lý, RAM, ổ cứng), cổng mạng/IP, hệ điều hành, phần mềm.
-/// Mỗi nguồn có THỂ có nhiều đường dẫn khả dĩ (candidate) — ví dụ "os" thử lần lượt "OperatingSystem" rồi
-/// "Component/OperatingSystem" rồi "Item_OperatingSystem" (các cách đặt tên khác nhau tuỳ bản GLPI) — dùng cái đầu tiên
-/// trả về thành công rồi ghi nhớ cho các lần gọi sau (không thử lại từ đầu mỗi lần). Nguồn nào lỗi liên tục sẽ bị bỏ qua
-/// cho phần còn lại của lần đồng bộ để không gọi hàng nghìn lần vô ích.
-/// </summary>
 public sealed partial class GlpiClient
 {
     private const int FailuresBeforeSkip = 5;
 
     private readonly SemaphoreSlim _endpointLock = new(1, 1);
     private Dictionary<string, List<string>>? _endpointCandidates;
-    // Đường dẫn đã xác nhận dùng được cho mỗi nguồn (key) trong lần đồng bộ này — gọi thẳng, không thử lại các candidate khác.
     private readonly ConcurrentDictionary<string, string> _confirmedEndpoint = new();
     private string? _specUrl;
-    // Nhiều nơi độc lập cùng cần dò tài liệu API (Tablet/Simcard/software) — nhớ lại kết quả 1 lần cho cả đời GlpiClient
-    // này (1 lần đồng bộ hoặc 1 lần probe), tránh tải lại + phân tích lại cùng 1 file doc.json nhiều lần không cần thiết.
     private List<string>? _specPathsCache;
     private readonly SemaphoreSlim _specPathsLock = new(1, 1);
     private readonly ConcurrentDictionary<string, int> _sourceFailures = new();
@@ -57,18 +46,11 @@ public sealed partial class GlpiClient
         return index > 0 ? _options.ComputerEndpoint[..index] : "";
     }
 
-    // Tên gọi khác nhau của cùng 1 khái niệm, dùng để nhận diện đường dẫn phù hợp trong tài liệu API (nếu tải được).
-    // Không có "net" và "os": bản GLPI của công ty không có route nào lấy IP hay hệ điều hành của Computer qua REST API
-    // (đã thử OperatingSystem/Component/OperatingSystem/Item_OperatingSystem, cả 3 đều 404 trên dữ liệu thật) nên không
-    // tự dò/đoán nữa, tránh gọi phí công + hiện cảnh báo mỗi lần đồng bộ. Muốn bật lại (bản GLPI khác có hỗ trợ) thì đặt
-    // thẳng Glpi:NetworkPortEndpoint / Glpi:OperatingSystemEndpoint.
     private static readonly (string Key, string[] Names)[] DiscoveredSources =
     [
         ("software", ["SoftwareInstallation", "SoftwareInstallations", "Software", "Softwares", "SoftwareVersion", "SoftwareVersions", "Item_SoftwareVersion", "Item_SoftwareVersions"]),
     ];
 
-    // Không dò được từ tài liệu API (hoặc tài liệu không tải được) thì thử lần lượt các cách đặt tên phổ biến của GLPI,
-    // từ "chuẩn" nhất tới các biến thể ít gặp hơn.
     private static readonly Dictionary<string, string[]> FallbackTemplates = new()
     {
         ["software"] = ["/Assets/Computer/{id}/SoftwareInstallation", "/Assets/Computer/{id}/Software", "/Assets/Computer/{id}/Component/Software", "/Assets/Computer/{id}/Item_SoftwareVersion", "/Assets/Computer/{id}/SoftwareVersion"],
@@ -88,9 +70,6 @@ public sealed partial class GlpiClient
                 ["ram"] = [_options.MemoryEndpoint],
                 ["hdd"] = [_options.HardDriveEndpoint],
             };
-            // "net"/"os" chỉ chạy khi admin tự đặt thẳng đường dẫn (đã xác nhận bản GLPI mặc định không có route nào cho
-            // IP/hệ điều hành của Computer) — không có thì để rỗng, FetchSourceAsync bỏ qua ngay, không tốn cuộc gọi và
-            // không báo cảnh báo.
             map["net"] = Blank(_options.NetworkPortEndpoint) is { } netEndpoint ? [netEndpoint] : [];
             map["os"] = Blank(_options.OperatingSystemEndpoint) is { } osEndpoint ? [osEndpoint] : [];
             var explicitValues = new Dictionary<string, string?>
@@ -111,7 +90,6 @@ public sealed partial class GlpiClient
                 map[key] = discovered.Concat(fallbacks).Distinct().ToList();
             }
             _endpointCandidates = map;
-            // Cấu hình có thể vừa được admin sửa lại — thử lại từ đầu thay vì cứ dùng mãi đường dẫn đã xác nhận trước đó.
             if (refresh) { _confirmedEndpoint.Clear(); _specPathsCache = null; }
         }
         finally
@@ -122,9 +100,6 @@ public sealed partial class GlpiClient
 
     private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    // Tài liệu OpenAPI của GLPI (đường dẫn thay đổi theo phiên bản nên thử vài chỗ). Không tải được thì trả về danh sách rỗng.
-    // Nhớ lại kết quả (xem _specPathsCache) — GetTabletsAsync, GetSimcardsAsync và vòng dò "software" ở trên đều gọi
-    // hàm này độc lập; không nhớ lại thì 1 lần đồng bộ có thể tải + phân tích lại cùng 1 file doc.json tới 3 lần.
     private async Task<List<string>> LoadSpecPathsAsync(string prefix, CancellationToken ct)
     {
         if (_specPathsCache is not null) return _specPathsCache;
@@ -165,7 +140,6 @@ public sealed partial class GlpiClient
 
     private static readonly Regex IdPlaceholder = new(@"\{[^}]+\}", RegexOptions.Compiled);
 
-    // 1 lần gọi thật sự tới GLPI cho ĐÚNG 1 đường dẫn (không thử candidate khác); tự xin lại token nếu bị 401 một lần.
     private async Task<(JsonElement? Body, int Status, string Url)> FetchOneAsync(string template, int glpiId, CancellationToken ct)
     {
         var url = $"{_options.BaseUrl}{IdPlaceholder.Replace(template, glpiId.ToString(), 1)}";
@@ -191,15 +165,10 @@ public sealed partial class GlpiClient
         return (null, 401, url);
     }
 
-    // Gọi 1 nguồn chi tiết của 1 máy: nguồn đã xác nhận thì gọi thẳng; chưa thì thử lần lượt các candidate tới khi có 1 cái
-    // thành công (HTTP 2xx) rồi ghi nhớ cho các máy sau. 404 thì thử candidate kế tiếp; lỗi khác (500, mất mạng...) thì
-    // dừng và báo luôn — lỗi đó không tự hết khi đổi đường dẫn.
     private async Task<(JsonElement? Body, int Status, string? Url)> FetchSourceAsync(string key, int glpiId, GlpiDetailReport? report, CancellationToken ct)
     {
         if (_confirmedEndpoint.TryGetValue(key, out var confirmed))
         {
-            // Đường dẫn đã xác nhận dùng được nhưng GLPI bắt đầu lỗi liên tục giữa lần đồng bộ (vd GLPI khởi động lại) —
-            // sau vài lần lỗi thì ngưng gọi tiếp cho các máy còn lại, không gọi hoài 1 đường dẫn chắc chắn vẫn đang lỗi.
             if (_sourceFailures.GetValueOrDefault(key) >= FailuresBeforeSkip) return (null, 0, confirmed);
             var (body, status, url) = await FetchOneAsync(confirmed, glpiId, ct);
             if (body is null) { _sourceFailures.AddOrUpdate(key, 1, (_, n) => n + 1); report?.Warn(key, $"GLPI trả HTTP {status} ở {confirmed} — bỏ qua nguồn này. Kiểm tra/đặt lại đường dẫn trong cấu hình Glpi."); }
@@ -221,7 +190,7 @@ public sealed partial class GlpiClient
                 _sourceSuccesses.AddOrUpdate(key, 1, (_, n) => n + 1);
                 return (body, status, url);
             }
-            if (status is not (404 or 0)) // lỗi khác 404: nguồn có tồn tại nhưng đang lỗi, đổi đường dẫn khác cũng vô ích
+            if (status is not (404 or 0))
             {
                 _sourceFailures.AddOrUpdate(key, 1, (_, n) => n + 1);
                 report?.Warn(key, $"GLPI trả HTTP {status} ở {template} — bỏ qua nguồn này. Kiểm tra/đặt lại đường dẫn trong cấu hình Glpi.");
@@ -257,7 +226,6 @@ public sealed partial class GlpiClient
         return ParseDetails(cpu.Result.Body, ram.Result.Body, hdd.Result.Body, net.Result.Body, os.Result.Body, software.Result.Body);
     }
 
-    /// <summary>Lấy chi tiết cho nhiều máy, song song có giới hạn (Glpi:DetailConcurrency). Key = mã máy trong GLPI. progress(đã xong, tổng) được gọi sau mỗi máy.</summary>
     public async Task<Dictionary<int, GlpiComputerDetails>> GetDetailsForComputersAsync(IEnumerable<int> glpiIds, GlpiDetailReport report, Action<int, int>? progress = null, CancellationToken ct = default)
     {
         _sourceFailures.Clear();
@@ -276,7 +244,6 @@ public sealed partial class GlpiClient
         return new Dictionary<int, GlpiComputerDetails>(results);
     }
 
-    /// <summary>Công cụ kiểm tra cho admin: gọi mọi nguồn chi tiết của 1 máy và trả về phản hồi thô + kết quả đã đọc.</summary>
     public async Task<GlpiProbeResult> ProbeComputerAsync(int glpiId, CancellationToken ct = default)
     {
         _sourceFailures.Clear();
@@ -292,8 +259,6 @@ public sealed partial class GlpiClient
         return new GlpiProbeResult(_specUrl, endpointsView, calls, parsed);
     }
 
-    /// <summary>Công cụ kiểm tra cho admin: liệt kê đường dẫn thật trong tài liệu API của GLPI có chứa 1 từ khoá (không phân
-    /// biệt hoa/thường) — dùng khi các đường dẫn tự đoán (net/os/software) đều sai, để biết tên chuẩn GLPI đang dùng.</summary>
     public async Task<object> ProbeSpecPathsAsync(string? keyword, CancellationToken ct = default)
     {
         var prefix = VersionPrefix();
@@ -302,7 +267,6 @@ public sealed partial class GlpiClient
         return new { spec_url = _specUrl, total_paths = paths.Count, matched };
     }
 
-    /// <summary>Công cụ kiểm tra cho admin: xem thô vài dòng đầu của danh sách SIM (để đối chiếu tên trường thật, vd MSISDN).</summary>
     public async Task<object> ProbeSimcardsAsync(CancellationToken ct = default)
     {
         var simcards = await GetSimcardsAsync(ct);

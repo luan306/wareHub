@@ -50,7 +50,6 @@ export function Layout() {
     setOpenGroups((current) => ({ ...current, [key]: !current[key] }));
   }
 
-  // Điện thoại: chuyển trang thì đóng ngăn kéo menu.
   useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
 
   useEffect(() => {

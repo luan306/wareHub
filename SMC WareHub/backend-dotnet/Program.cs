@@ -18,8 +18,6 @@ using WareHub.Api.Data;
 using WareHub.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
-// Ghi thêm log ra file (logs/app-YYYY-MM-DD.log) song song với console: xem lại lịch sử lỗi được ngay cả sau khi
-// cửa sổ console đã đóng hoặc đã cuộn mất, không phải copy tay từ màn hình mỗi lần cần gửi log đi.
 builder.Logging.AddProvider(new FileLoggerProvider(Path.Combine(builder.Environment.ContentRootPath, "logs")));
 var configuration = builder.Configuration;
 var connectionString = configuration.GetConnectionString("Default")
@@ -27,7 +25,6 @@ var connectionString = configuration.GetConnectionString("Default")
 var jwtSecret = configuration["Jwt:Secret"];
 if (string.IsNullOrWhiteSpace(jwtSecret) || jwtSecret.Length < 32)
     throw new InvalidOperationException("Jwt:Secret phải có tối thiểu 32 ký tự");
-// appsettings.json trong kho mã chứa 1 khoá mẫu ai cũng đọc được; chạy thật mà quên đặt khoá riêng thì kẻ tấn công tự ký được token admin.
 if (builder.Environment.IsProduction()
     && (new[] { "change", "dev_only", "example", "placeholder" }.Any(w => jwtSecret.Contains(w, StringComparison.OrdinalIgnoreCase)) || jwtSecret.Distinct().Count() < 12))
     throw new InvalidOperationException("Jwt:Secret đang là giá trị mẫu/yếu. Đặt chuỗi ngẫu nhiên dài (tối thiểu 32 ký tự) bằng biến môi trường Jwt__Secret.");
@@ -37,13 +34,11 @@ const string JwtAudience = "warehub-web";
 
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.AddServerHeader = false;                              // không khoe "Kestrel" cho người ngoài
-    options.Limits.MaxRequestBodySize = 1_048_576;                // 1MB: mọi yêu cầu của ứng dụng đều nhỏ hơn nhiều
+    options.AddServerHeader = false;
+    options.Limits.MaxRequestBodySize = 1_048_576;
     options.Limits.MaxRequestHeadersTotalSize = 32 * 1024;
     options.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(15);
 });
-// Địa chỉ IP thật của người dùng (để khoá đăng nhập theo IP): đọc từ X-Forwarded-For do nginx ghi đè bằng $remote_addr, chỉ tin 1 tầng.
-// Cổng của backend KHÔNG được mở ra ngoài (chỉ nginx gọi vào) — nếu mở, kẻ ngoài có thể tự đặt header này để lẩn tránh khoá.
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
@@ -56,9 +51,6 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
 });
 builder.Services.AddResponseCompression(options => options.EnableForHttps = true);
-// Dò phiên bản MySQL đúng 1 lần: lambda cấu hình bên dưới chạy lại cho MỖI DbContext (tức mỗi yêu cầu), nếu để
-// AutoDetect ngay trong đó thì mỗi yêu cầu sẽ mở thêm 1 kết nối MySQL chỉ để hỏi số phiên bản (làm chậm cả chục lần).
-// PublicationOnly: nếu MySQL chưa sẵn sàng thì lần dò này lỗi nhưng KHÔNG bị nhớ lỗi, lần sau dò lại.
 var mysqlVersion = new Lazy<ServerVersion>(() => ServerVersion.AutoDetect(connectionString), LazyThreadSafetyMode.PublicationOnly);
 builder.Services.AddDbContext<WareHubDbContext>(options =>
     options.UseMySql(connectionString, mysqlVersion.Value, mysql =>
@@ -85,24 +77,19 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJw
         ValidAudience = JwtAudience,
         ValidateLifetime = true,
         RequireExpirationTime = true,
-        ValidAlgorithms = [SecurityAlgorithms.HmacSha256], // chặn kiểu tấn công đổi thuật toán (alg confusion / alg=none)
+        ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
         ClockSkew = TimeSpan.FromSeconds(30)
     };
 });
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("admin", policy => policy.RequireRole("admin"));
-    // Vai trò cao nhất: cấu hình LDAP, nâng quyền tài khoản khác lên admin/superadmin... (token superadmin có cả claim
-    // "admin" nên policy "admin" ở trên vẫn qua được, không cần sửa các chỗ đã RequireAuthorization("admin")).
     options.AddPolicy("superadmin", policy => policy.RequireRole("superadmin"));
 });
 var origins = configuration.GetSection("Cors:Origins").Get<string[]>() ?? [];
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod()));
 
-// Trang /swagger — xem và thử trực tiếp mọi API (vd cho đồng nghiệp muốn tự gọi API tạo QR, không cần đọc code).
-// Chỉ hiện DANH SÁCH api; gọi API thật vẫn phải có token hợp lệ (dán vào nút "Authorize") như mọi client khác,
-// không tự ý bỏ qua xác thực của từng endpoint.
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -124,10 +111,6 @@ builder.Services.AddSwaggerGen(options =>
 
 var app = builder.Build();
 
-// /swagger để lộ TOÀN BỘ hình dạng API (tên trường, đường dẫn...) cho bất kỳ ai ghé trang — dù gọi API thật vẫn cần
-// token hợp lệ, bản thân việc này cũng là thông tin không nên công khai cho người ngoài dò. Chặn thêm 1 lớp Basic Auth
-// riêng (không liên quan tài khoản WareHub) trước khi cho vào; CHƯA cấu hình Swagger:Username/Password trong appsettings
-// thì tắt hẳn /swagger (an toàn mặc định) thay vì để hở.
 var swaggerUser = configuration["Swagger:Username"];
 var swaggerPass = configuration["Swagger:Password"];
 if (!string.IsNullOrWhiteSpace(swaggerUser) && !string.IsNullOrWhiteSpace(swaggerPass))
@@ -153,7 +136,7 @@ if (!string.IsNullOrWhiteSpace(swaggerUser) && !string.IsNullOrWhiteSpace(swagge
                     }
                 }
             }
-            catch (FormatException) { /* header lỗi định dạng -> coi như chưa xác thực */ }
+            catch (FormatException) { }
         }
         context.Response.Headers.WWWAuthenticate = "Basic realm=\"WareHub Swagger\"";
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
@@ -175,7 +158,7 @@ app.Use(async (context, next) =>
     if (context.Request.IsHttps) headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
     if (context.Request.Path.StartsWithSegments("/api"))
     {
-        headers["Cache-Control"] = "no-store"; // dữ liệu API không được lưu trong bộ nhớ đệm của trình duyệt/proxy
+        headers["Cache-Control"] = "no-store";
         headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'";
     }
     await next();
@@ -189,7 +172,6 @@ app.Use(async (context, next) =>
     }
     catch (Exception exception) when (exception is BadHttpRequestException or JsonException)
     {
-        // JSON hỏng, thiếu tham số bắt buộc, quá cỡ...: lỗi của người gọi. Không ghi log lỗi (tránh bị dùng để làm đầy log) và không lộ chi tiết nội bộ.
         if (!context.Response.HasStarted)
         {
             context.Response.StatusCode = exception is BadHttpRequestException bad ? bad.StatusCode : StatusCodes.Status400BadRequest;
@@ -208,10 +190,6 @@ app.Use(async (context, next) =>
 });
 app.UseCors();
 app.UseAuthentication();
-// Xác thực bằng API Key (header "X-Api-Key") — thay thế hẳn JWT cho riêng request này, dùng cho người/hệ thống ngoài
-// không có tài khoản đăng nhập WareHub, chỉ được gọi đúng những API thuộc các "scope" đã gắn cho key (xem ApiKeyScope
-// bên dưới và nhóm "/api/apikeys" để admin tạo/thu hồi key). Đặt SAU UseAuthentication (không bị JwtBearer ghi đè lại
-// context.User) và TRƯỚC middleware tra CurrentUser theo DB bên dưới (middleware đó được sửa để bỏ qua request loại này).
 app.Use(async (context, next) =>
 {
     if (context.Request.Path.StartsWithSegments("/api") && context.Request.Headers.TryGetValue("X-Api-Key", out var presented) && !string.IsNullOrWhiteSpace(presented))
@@ -239,8 +217,6 @@ app.Use(async (context, next) =>
         identity.AddClaim(new Claim("api_key_id", key.Id.ToString()));
         identity.AddClaim(new Claim("api_key_name", key.Name));
         context.User = new ClaimsPrincipal(identity);
-        // Chỉ ghi lại DB khi mốc cũ đã quá 1 phút — key dùng để gọi liên tục (vd script tự động) không nên tốn 1 lượt
-        // ghi DB cho MỖI request chỉ để cập nhật "lần dùng gần nhất", "chính xác tới phút" là đủ cho mục đích theo dõi.
         if (key.LastUsedAt is null || key.LastUsedAt < DateTime.UtcNow.AddMinutes(-1))
         {
             key.LastUsedAt = DateTime.UtcNow;
@@ -249,12 +225,8 @@ app.Use(async (context, next) =>
     }
     await next();
 });
-// Chế độ bảo trì: chặn mọi API với 503 (giao diện web đọc mã này để hiện màn hình "đang bảo trì"), trừ admin và các
-// đường cần thiết để bật/tắt/kiểm tra (health, trạng thái bảo trì, đăng nhập). Đặt TRƯỚC bước tra cứu người dùng
-// trong DB nên vẫn hoạt động khi đang thao tác trên cơ sở dữ liệu.
 var maintenance = app.Services.GetRequiredService<MaintenanceState>();
 var userCache = app.Services.GetRequiredService<UserCache>();
-// Băm 1 mật khẩu giả cho tài khoản không tồn tại, để thời gian phản hồi đăng nhập không lộ tên nào có thật.
 var dummyUser = new User { PasswordHash = new PasswordHasher<User>().HashPassword(new User(), "dummy-password-used-only-for-timing") };
 app.Use(async (context, next) =>
 {
@@ -270,8 +242,6 @@ app.Use(async (context, next) =>
 });
 app.Use(async (context, next) =>
 {
-    // Request xác thực bằng API Key không gắn với tài khoản WareHub nào (không có "CurrentUser") — quyền hạn của nó
-    // đã được xét xong ở middleware API Key phía trên, không cần/không thể tra cứu DB người dùng ở đây.
     if (context.User.Identity?.IsAuthenticated == true && context.User.Identity.AuthenticationType != "ApiKey")
     {
         var id = context.User.FindFirstValue(JwtRegisteredClaimNames.Sub) ?? context.User.FindFirstValue(ClaimTypes.NameIdentifier);
@@ -282,7 +252,6 @@ app.Use(async (context, next) =>
             await context.Response.WriteAsJsonAsync(new { error = "Tài khoản không tồn tại hoặc đã bị khóa" });
             return;
         }
-        // Đổi mật khẩu hoặc đổi vai trò làm mọi token đã cấp trước đó mất hiệu lực (kể cả quyền admin đã bị thu hồi).
         if (!string.Equals(context.User.FindFirstValue("stamp"), SessionStamp(user), StringComparison.Ordinal))
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
@@ -297,16 +266,12 @@ app.UseAuthorization();
 
 await InitializeDatabaseAsync(app.Services, configuration);
 
-// version đổi sau mỗi lần build lại: trình duyệt so sánh để biết máy chủ vừa được cập nhật và tự tải lại trang.
 var buildId = File.GetLastWriteTimeUtc(Assembly.GetEntryAssembly()!.Location).ToString("yyyyMMddHHmmss");
 app.MapGet("/api/health", () => Results.Ok(new { ok = true, version = buildId, maintenance = maintenance.Current.Enabled }));
-// Sẵn sàng phục vụ: khác /api/health (chỉ cho biết tiến trình đang chạy), điểm này còn thử kết nối cơ sở dữ liệu.
-// Script triển khai blue-green chỉ chuyển lưu lượng sang bản mới sau khi điểm này trả 200.
 app.MapGet("/api/ready", async (WareHubDbContext db, CancellationToken cancellationToken) =>
     await db.Database.CanConnectAsync(cancellationToken)
         ? Results.Ok(new { ready = true, version = buildId })
         : Results.Json(new { ready = false, version = buildId }, statusCode: StatusCodes.Status503ServiceUnavailable));
-// TẠM THỜI — chẩn đoán vụ IP luôn ra 127.0.0.1 khi vào qua domain/IIS, và vụ đăng nhập qua domain báo sai mật khẩu.
 app.MapGet("/api/maintenance", () => Results.Ok(maintenance.Current));
 app.MapPut("/api/maintenance", (MaintenanceRequest request) =>
 {
@@ -335,9 +300,6 @@ auth.MapPost("/login", async (LoginRequest request, HttpContext context, WareHub
         return Results.Json(new { error = $"Đăng nhập sai quá nhiều lần. Vui lòng thử lại sau {minutes} phút." }, statusCode: StatusCodes.Status429TooManyRequests);
     }
     var user = await db.Users.SingleOrDefaultAsync(x => x.Username == username);
-    // Tài khoản gắn LDAP (AuthSource="ldap", tạo qua "Thêm từ LDAP" ở trang Người dùng): xác thực bằng cách bind
-    // thẳng vào AD, không so với PasswordHash local (giá trị đó chỉ là chuỗi ngẫu nhiên không ai dùng được).
-    // Tài khoản không tồn tại vẫn phải băm 1 lần mật khẩu: nếu không, thời gian phản hồi ngắn hơn hẳn sẽ lộ tên đăng nhập nào có thật.
     var passwordOk = user?.AuthSource == "ldap"
         ? await ldap.VerifyPasswordAsync(user.Username, request.Password, context.RequestAborted)
         : VerifyPassword(user ?? dummyUser, request.Password, hasher) && user is not null;
@@ -348,9 +310,6 @@ auth.MapPost("/login", async (LoginRequest request, HttpContext context, WareHub
         return Results.Json(new { error = "Sai tên đăng nhập hoặc mật khẩu" }, statusCode: StatusCodes.Status401Unauthorized);
     }
     guard.RecordSuccess(ip, username);
-    // Đang bảo trì: chỉ admin/superadmin được vào (để tắt bảo trì); người khác nhận 503 để giao diện hiện màn hình
-    // bảo trì — dùng CHUNG đúng 1 hàm IsMaintenanceExemptRole với middleware phía trên (chỗ đó check qua JWT claims
-    // sau khi đăng nhập, ở đây chưa có claims nên so trực tiếp Role trong DB), không định nghĩa lại quy tắc lần 2.
     if (maintenance.Current is { Enabled: true } info && !IsMaintenanceExemptRole(user.Role))
         return Results.Json(new { error = info.Message, maintenance = true, until = info.Until }, statusCode: StatusCodes.Status503ServiceUnavailable);
     return Results.Ok(new { token = CreateToken(user, config), user = UserDto(user) });
@@ -365,8 +324,6 @@ devices.MapGet("/", async (string? search, string? loai, string? lifecycle_statu
     if (!string.IsNullOrWhiteSpace(search)) query = query.Where(x => x.Ma.Contains(search) || x.Ten.Contains(search) || (x.PhongBan ?? "").Contains(search) || (x.UserName ?? "").Contains(search) || (x.IpAddress ?? "").Contains(search));
     if (!string.IsNullOrWhiteSpace(loai)) query = query.Where(x => x.Loai == loai);
     if (!string.IsNullOrWhiteSpace(lifecycle_status)) query = query.Where(x => x.LifecycleStatus == lifecycle_status);
-    // Lọc thiết bị đã/chưa từng in tem — vd tìm lại đúng lô vừa in tem hôm nay (hoặc trong 1 khoảng ngày) để làm phiếu
-    // bàn giao, không phải nhớ tay từng mã. "Chưa in tem" không có chiều thời gian nên bỏ qua printed_from/to khi đó.
     var hasPrintedDateFilter = !string.IsNullOrWhiteSpace(printed_from) || !string.IsNullOrWhiteSpace(printed_to);
     if (printed == true || (printed != false && hasPrintedDateFilter))
     {
@@ -376,11 +333,7 @@ devices.MapGet("/", async (string? search, string? loai, string? lifecycle_statu
         query = query.Where(x => printedQuery.Any(p => p.DeviceId == x.Id));
     }
     else if (printed == false) query = query.Where(x => !db.PrintHistory.Any(p => p.DeviceId == x.Id));
-    // Chưa chọn cột nào để sắp xếp (sortBy rỗng, rơi về mặc định CreatedAt bên dưới) thì mặc định MỚI NHẤT TRƯỚC —
-    // không thì thiết bị vừa thêm/đồng bộ lại nằm tuốt cuối danh sách, phải tự bấm sắp xếp mới thấy. Đã CHỌN cột cụ
-    // thể rồi thì vẫn theo đúng chiều người dùng bấm (mặc định tăng dần khi mới bấm, như trước giờ).
     var descending = sortBy is null ? sortDir != "asc" : sortDir == "desc";
-    // Chỉ nhận cột nằm trong danh sách cho phép sẵn — tránh nhận trực tiếp tên cột từ client vào OrderBy.
     Expression<Func<Device, object>> keySelector = sortBy switch
     {
         "ma" => x => x.Ma,
@@ -404,7 +357,7 @@ devices.MapGet("/", async (string? search, string? loai, string? lifecycle_statu
         _ => x => x.CreatedAt,
     };
     query = descending ? query.OrderByDescending(keySelector) : query.OrderBy(keySelector);
-    if (sortBy is not null) query = ((IOrderedQueryable<Device>)query).ThenByDescending(x => x.CreatedAt); // phá thế bằng nhau (vd nhiều thiết bị cùng trống 1 cột) theo thứ tự ổn định
+    if (sortBy is not null) query = ((IOrderedQueryable<Device>)query).ThenByDescending(x => x.CreatedAt);
     var (currentPage, limit) = ParsePaging(page, pageSize, defaultSize: 24);
     var total = await query.CountAsync();
     var rows = await query.Skip((currentPage - 1) * limit).Take(limit).ToListAsync();
@@ -450,15 +403,9 @@ devices.MapGet("/history", async (string? search, string? from, string? to, int?
         .ToListAsync();
     return Results.Ok(new { history = rows, total, page = currentPage, pageSize = limit });
 }).RequireAuthorization("admin");
-// Kiểm tra kết nối chi tiết GLPI cho 1 máy: /api/devices/glpi-probe?id=<mã máy trong GLPI, thấy trên URL: computer.form.php?id=227>.
-// Trả về đường dẫn đang dùng, phản hồi thô của từng nguồn và giá trị đã đọc được — dùng để chỉnh cấu hình Glpi khi khác bản GLPI.
 devices.MapGet("/glpi-probe", (int id, HttpContext context, GlpiClient glpi) => GlpiProbeAsync(glpi, () => glpi.ProbeComputerAsync(id, context.RequestAborted))).RequireAuthorization("admin");
-// Xem thô vài dòng đầu của danh sách SIM trong GLPI — dùng để đối chiếu tên trường thật (vd MSISDN) khi khớp SIM theo người dùng.
 devices.MapGet("/glpi-probe-simcards", (GlpiClient glpi, CancellationToken ct) => GlpiProbeAsync(glpi, () => glpi.ProbeSimcardsAsync(ct))).RequireAuthorization("admin");
-// Liệt kê đường dẫn thật trong tài liệu API của GLPI chứa từ khoá (vd ?q=software) — dùng khi các đường dẫn tự đoán đều sai.
 devices.MapGet("/glpi-probe-paths", (string? q, GlpiClient glpi, CancellationToken ct) => GlpiProbeAsync(glpi, () => glpi.ProbeSpecPathsAsync(q, ct))).RequireAuthorization("admin");
-// TẠM THỜI — kiểm tra xem bản GLPI thật có trả trường "type" (Computer type: Desktop/Laptop) kèm theo danh sách máy
-// không, để chẩn đoán vì sao lọc "Desktop" vẫn trống dù đã đồng bộ. Xoá endpoint này sau khi xác định xong nguyên nhân.
 devices.MapGet("/glpi-probe-types", (GlpiClient glpi, CancellationToken ct) => GlpiProbeAsync(glpi, async () =>
 {
     var computers = await glpi.GetComputersAsync(ct);
@@ -470,21 +417,16 @@ devices.MapGet("/glpi-probe-types", (GlpiClient glpi, CancellationToken ct) => G
         sample = computers.Take(15).Select(c => new { c.Id, c.Serial, c.Name, type_name = c.Type?.Name, type_id = c.Type?.Id, extra_keys = c.Extra?.Keys.ToList() }),
     };
 })).RequireAuthorization("admin");
-// Đồng bộ chạy nền (xem GlpiSyncJob): POST chỉ bắt đầu và trả lời ngay; GET /glpi-sync/status cho tiến độ và kết quả.
 devices.MapPost("/glpi-sync", (HttpContext context, GlpiClient glpi, GlpiSyncJob job, IServiceScopeFactory scopes, IHostApplicationLifetime lifetime) =>
 {
     if (!glpi.IsConfigured) return GlpiNotConfigured();
     var userId = ((User)context.Items["CurrentUser"]!).Id;
-    // Dùng ApplicationStopping (không phải RequestAborted): trình duyệt đóng tab/ngắt kết nối không được làm đứt việc đồng bộ.
     var started = job.TryStart(j => RunGlpiSyncAsync(scopes, userId, j, lifetime.ApplicationStopping), app.Logger);
     return started
         ? Results.Accepted("/api/devices/glpi-sync/status", job.Snapshot())
         : Results.Conflict(new { error = "Đang có một lần đồng bộ GLPI chạy, vui lòng chờ nó xong." });
 }).RequireAuthorization("admin");
 devices.MapGet("/glpi-sync/status", (GlpiSyncJob job) => Results.Ok(job.Snapshot())).RequireAuthorization("admin");
-// Form Clone trên giao diện dùng chung với Thêm/Sửa nên người dùng sửa được mọi trường trước khi lưu — nhận
-// DeviceRequest (giống Thêm mới) thay vì chỉ lấy Ma, để những trường đã sửa tay thật sự được lưu lại, không bị
-// âm thầm bỏ qua rồi máy mới lại y hệt máy gốc (trừ mã).
 devices.MapPost("/{id:int}/clone", async (int id, DeviceRequest request, WareHubDbContext db) =>
 {
     var validation = ValidateDevice(request); if (validation is not null) return Results.BadRequest(new { error = validation });
@@ -509,21 +451,17 @@ users.MapGet("/", async (WareHubDbContext db) => Results.Ok(new
 users.MapGet("/ldap-search", async (string? q, LdapService ldap, WareHubDbContext db, CancellationToken ct) =>
 {
     var query = q?.Trim();
-    // Để trống thì liệt kê sẵn (không bắt gõ trước); chỉ chặn khi gõ ĐÚNG 1 ký tự (lọc gần như không tác dụng, tốn công AD quét).
     if (query?.Length == 1) return Results.BadRequest(new { error = "Nhập ít nhất 2 ký tự để tìm" });
     if (!ldap.IsConfigured) return Results.BadRequest(new { error = "Chưa cấu hình kết nối LDAP (mục \"Ldap\" trong cấu hình)." });
     List<LdapUserMatch> matches;
     try { matches = await ldap.SearchUsersAsync(query, ct); }
     catch (Exception ex) when (ex is LdapException or InvalidOperationException) { return Results.BadRequest(new { error = $"Không kết nối được LDAP: {ex.Message}" }); }
-    // Lọc bớt những tài khoản đã có sẵn trong WareHub (local lẫn đã gắn LDAP từ trước) — tránh thêm trùng. Chỉ hỏi DB về
-    // đúng những username AD vừa trả (tối đa LdapService.MaxResults), không tải cả bảng users (có thể rất lớn) về so khớp.
     var candidateUsernames = matches.Select(m => m.Username).ToList();
     var existing = candidateUsernames.Count == 0 ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         : (await db.Users.Where(x => candidateUsernames.Contains(x.Username)).Select(x => x.Username).ToListAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
     return Results.Ok(new
     {
         results = matches.Where(m => !existing.Contains(m.Username)).Select(m => new { username = m.Username, full_name = m.FullName, email = m.Email }),
-        // AD trả về đúng bằng trần (MaxResults) thường nghĩa là còn nhiều hơn chưa lấy hết — báo để người dùng biết gõ tìm thu hẹp lại.
         truncated = matches.Count >= LdapService.MaxResults,
     });
 });
@@ -531,15 +469,11 @@ users.MapPost("/ldap-add", async (LdapAddRequest request, HttpContext context, W
 {
     var username = request.Username?.Trim(); var fullName = request.FullName?.Trim();
     if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(fullName)) return Results.BadRequest(new { error = "Thiếu tên đăng nhập hoặc họ tên" });
-    // AD có thể trả sAMAccountName/displayName dài hơn giới hạn cột ở đây — kiểm tra trước khi lưu, không để tới lúc
-    // SaveChangesAsync mới vỡ (MySQL "Data too long") thành lỗi 500 thô như UserCreateRequest bên dưới đã làm.
     if (username.Length > 50) return Results.BadRequest(new { error = "Tên đăng nhập không được vượt quá 50 ký tự" });
     if (fullName.Length > 100) return Results.BadRequest(new { error = "Họ tên không được vượt quá 100 ký tự" });
     if (request.Role is not ("admin" or "staff" or "superadmin")) return Results.BadRequest(new { error = "Vai trò không hợp lệ" });
     if (request.Role == "superadmin" && ((User)context.Items["CurrentUser"]!).Role != "superadmin") return Results.Forbid();
     if (await db.Users.AnyAsync(x => x.Username == username)) return Results.Conflict(new { error = $"Tên đăng nhập \"{username}\" đã tồn tại" });
-    // Tài khoản LDAP luôn xác thực qua AD khi đăng nhập — PasswordHash chỉ là chuỗi ngẫu nhiên không ai biết/dùng
-    // được, chỉ để cột đó không trống (không phải mật khẩu thật, không cho người dùng tự đặt).
     var user = new User { Username = username, FullName = fullName, Role = request.Role, AuthSource = "ldap" };
     user.PasswordHash = hasher.HashPassword(user, Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"));
     db.Users.Add(user);
@@ -555,7 +489,6 @@ users.MapPost("/", async (UserCreateRequest request, HttpContext context, WareHu
     if (fullName.Length > 100) return Results.BadRequest(new { error = "Họ tên không được vượt quá 100 ký tự" });
     if (PasswordPolicy.Validate(request.Password, username) is { } weakPassword) return Results.BadRequest(new { error = weakPassword });
     if (request.Role is not ("admin" or "staff" or "superadmin")) return Results.BadRequest(new { error = "Vai trò không hợp lệ" });
-    // Chỉ superadmin được phong superadmin khác — admin thường không được tự nâng ai lên ngang cấp cao nhất.
     if (request.Role == "superadmin" && ((User)context.Items["CurrentUser"]!).Role != "superadmin") return Results.Forbid();
     if (await db.Users.AnyAsync(x => x.Username == username)) return Results.Conflict(new { error = $"Tên đăng nhập \"{username}\" đã tồn tại" });
     var user = new User { Username = username, FullName = fullName, Role = request.Role }; user.PasswordHash = hasher.HashPassword(user, request.Password); db.Users.Add(user); await db.SaveChangesAsync(); AuditUserAction(app.Logger, context, "tạo", user.Username, $"vai trò {user.Role}"); return Results.Created($"/api/users/{user.Id}", new { id = user.Id });
@@ -564,12 +497,8 @@ users.MapPut("/{id:int}", async (int id, UserUpdateRequest request, HttpContext 
 {
     var user = await db.Users.FindAsync(id); if (user is null) return Results.NotFound(new { error = "Không tìm thấy người dùng" });
     var currentUser = (User)context.Items["CurrentUser"]!;
-    // Admin tự hạ quyền/khoá chính mình sẽ làm hệ thống không còn ai quản trị; việc này phải do admin khác làm.
     if (currentUser.Id == id && ((request.Role is not null && request.Role != user.Role) || request.IsActive == false))
         return Results.BadRequest(new { error = "Không thể tự đổi vai trò hoặc tự khoá chính mình" });
-    // Chỉ superadmin được đụng tới vai trò/trạng thái hoạt động/mật khẩu của 1 superadmin khác — kiểm tra ở ĐẦU hàm,
-    // trước khi áp bất kỳ thay đổi nào, để bao được cả 3 trường cùng lúc (trước đây chỉ chặn khi đổi "role", nên admin
-    // thường vẫn đổi được mật khẩu hoặc khoá tài khoản 1 superadmin khác qua 2 trường IsActive/Password còn lại).
     var targetIsOrBecomesSuperadmin = user.Role == "superadmin" || request.Role == "superadmin";
     if (targetIsOrBecomesSuperadmin && currentUser.Role != "superadmin"
         && (request.Role is not null || request.IsActive.HasValue || !string.IsNullOrWhiteSpace(request.Password)))
@@ -589,7 +518,6 @@ users.MapPut("/{id:int}", async (int id, UserUpdateRequest request, HttpContext 
     if (request.IsActive.HasValue) user.IsActive = request.IsActive.Value;
     if (!string.IsNullOrWhiteSpace(request.Password))
     {
-        // Tài khoản LDAP không có mật khẩu local để đặt lại — mật khẩu của họ nằm bên Active Directory.
         if (user.AuthSource == "ldap") return Results.BadRequest(new { error = "Tài khoản gắn LDAP không đặt lại mật khẩu ở đây — mật khẩu quản lý bên Active Directory." });
         if (PasswordPolicy.Validate(request.Password, user.Username) is { } weakPassword) return Results.BadRequest(new { error = weakPassword });
         user.PasswordHash = hasher.HashPassword(user, request.Password);
@@ -602,9 +530,6 @@ users.MapDelete("/{id:int}", async (int id, HttpContext context, WareHubDbContex
 {
     var current = (User)context.Items["CurrentUser"]!; if (current.Id == id) return Results.BadRequest(new { error = "Không thể tự xoá chính mình" });
     var user = await db.Users.FindAsync(id); if (user is null) return Results.NotFound(new { error = "Không tìm thấy người dùng" });
-    // Lịch sử in tem/sửa thiết bị/phiếu bàn giao đã lưu sẵn TÊN người thực hiện (PrintedByName/ChangedByName/CreatedByName)
-    // ngay lúc tạo — không còn phụ thuộc bản ghi User còn tồn tại hay không, nên xoá thẳng không bị chặn mà lịch sử vẫn giữ
-    // nguyên "ai đã làm gì" (chỉ mất liên kết id, không mất tên).
     db.Users.Remove(user);
     await db.SaveChangesAsync();
     userCache.Invalidate(id); AuditUserAction(app.Logger, context, "xoá", user.Username, ""); return Results.Ok(new { ok = true });
@@ -644,7 +569,6 @@ handovers.MapPost("/", async (HandoverRequest request, HttpContext context, Ware
     var device = request.DeviceId is int deviceId ? await db.Devices.AsNoTracking().SingleOrDefaultAsync(x => x.Id == deviceId) : null;
     var user = (User)context.Items["CurrentUser"]!;
     var kind = HandoverKind(device?.Loai);
-    // Người dùng tự gõ số phiếu (vd. để khớp số cũ ghi trên giấy/GLPI) thay vì để hệ thống tự cấp theo YYMMxxx.
     var customNo = Truncate(request.No, 12);
     if (!string.IsNullOrWhiteSpace(customNo))
     {
@@ -653,9 +577,6 @@ handovers.MapPost("/", async (HandoverRequest request, HttpContext context, Ware
         try { await db.SaveChangesAsync(); return Results.Ok(new { no = customNo, id = handover.Id }); }
         catch (DbUpdateException) { return Results.Conflict(new { error = $"Số phiếu \"{customNo}\" đã tồn tại" }); }
     }
-    // Hai người in cùng lúc có thể tính ra cùng một số; khoá duy nhất (no, kind) chặn trùng, ta thử lại với số kế
-    // tiếp. Chỉ hỏi DB quét lại cả tháng ở LẦN ĐẦU — từ lần trùng số thứ 2 trở đi chỉ +1 tiếp vào số đã tính, không
-    // quét lại DB từ đầu (lúc tranh chấp — đúng lúc này càng nên tránh thêm 1 lượt quét toàn bảng nữa).
     var prefix = $"{day.Year % 100:D2}{day.Month:D2}";
     var sequence = int.Parse((await NextHandoverNoAsync(db, day)).AsSpan(prefix.Length));
     for (var attempt = 0; attempt < 5; attempt++)
@@ -668,13 +589,10 @@ handovers.MapPost("/", async (HandoverRequest request, HttpContext context, Ware
     }
     return Results.Conflict(new { error = "Không cấp được số phiếu, vui lòng thử lại" });
 });
-// Dùng id (không phải "no") làm khoá định danh trên đường dẫn — "no" không còn là duy nhất toàn cục từ khi tách 2 dãy
-// số máy tính/điện thoại-tablet (2 nhóm có thể cùng ra 1 chuỗi "no" giống nhau, phân biệt nhau bằng cột "kind").
 handovers.MapPut("/{id:int}", async (int id, HandoverUpdateRequest request, WareHubDbContext db) =>
 {
     var handover = await db.Handovers.FindAsync(id);
     if (handover is null) return Results.NotFound(new { error = "Không tìm thấy phiếu" });
-    // In lại phiếu cũ đôi khi cần đổi luôn số phiếu (vd. khớp lại với số ghi tay/GLPI) — cho đổi nếu gửi kèm "no" khác số hiện tại.
     var newNo = Truncate(request.No, 12);
     if (!string.IsNullOrWhiteSpace(newNo) && newNo != handover.No)
     {
@@ -686,7 +604,6 @@ handovers.MapPut("/{id:int}", async (int id, HandoverUpdateRequest request, Ware
     await db.SaveChangesAsync();
     return Results.Ok(new { no = handover.No, id = handover.Id });
 });
-// Phiếu gần nhất của chính thiết bị; nếu chưa có thì lấy phiếu gần nhất của thiết bị cùng model để tái dùng thông số.
 handovers.MapGet("/latest", async (int device_id, string? model, WareHubDbContext db) =>
 {
     var latest = await db.Handovers.AsNoTracking().Where(x => x.DeviceId == device_id && x.Payload != null)
@@ -717,14 +634,11 @@ handovers.MapGet("/", async (string? search, string? kind, int? page, int? pageS
         var term = search.Trim();
         query = query.Where(x => x.No.Contains(term) || (x.FullName ?? "").Contains(term) || (x.DeviceMa ?? "").Contains(term) || (x.Payload ?? "").Contains(term));
     }
-    // Tách tab "Điện thoại/Tablet" / "Máy tính": lọc thẳng theo cột Kind ("mobile"/"computer", xem HandoverKind).
     if (kind == "phone") query = query.Where(x => x.Kind == "mobile");
     else if (kind == "computer") query = query.Where(x => x.Kind == "computer");
     var (currentPage, limit) = ParsePaging(page, pageSize, defaultSize: 30);
     var total = await query.CountAsync();
     var rows = await query.OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id).Skip((currentPage - 1) * limit).Take(limit).ToListAsync();
-    // Phiếu tạo trước khi có cột created_by_name (đã backfill lúc nâng cấp schema) rơi vào trường hợp hiếm còn thiếu —
-    // chỉ khi đó mới tra thêm bảng Users làm phương án dự phòng.
     var missingNameUserIds = rows.Where(x => string.IsNullOrEmpty(x.CreatedByName)).Select(x => x.UserId).Distinct().ToList();
     var userNames = missingNameUserIds.Count > 0
         ? await db.Users.AsNoTracking().Where(x => missingNameUserIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.FullName)
@@ -746,12 +660,7 @@ handovers.MapDelete("/{id:int}", async (int id, WareHubDbContext db) =>
     return Results.Ok(new { ok = true });
 }).RequireAuthorization("admin");
 
-// Cho mượn thiết bị IT tạm thời (khác hẳn Handover — bàn giao lâu dài): có hạn trả (due_at) và ngày trả thực tế
-// (returned_at, null = đang mượn), kèm chữ ký vẽ tay của người mượn chụp lại ngay lúc mượn.
 var loans = app.MapGroup("/api/loans").RequireAuthorization();
-// Gợi ý tên người mượn khi gõ — tra thẳng Active Directory (không giới hạn admin như /api/users/ldap-search, vì
-// nhân viên thường/IT helpdesk vẫn cần lập phiếu mượn) và KHÔNG lọc bớt theo tài khoản WareHub đã có: ai cũng có thể
-// là người mượn, không chỉ người có tài khoản đăng nhập hệ thống.
 loans.MapGet("/ldap-search", async (string? q, LdapService ldap, CancellationToken ct) =>
 {
     var query = q?.Trim();
@@ -792,8 +701,6 @@ loans.MapPost("/", async (DeviceLoanRequest request, HttpContext context, WareHu
         try { await db.SaveChangesAsync(); return Results.Ok(new { no = customNo, id = loan.Id }); }
         catch (DbUpdateException) { return Results.Conflict(new { error = $"Số phiếu \"{customNo}\" đã tồn tại" }); }
     }
-    // Hai người lập phiếu cùng lúc có thể tính ra cùng 1 số; khoá duy nhất "no" chặn trùng, thử lại với số kế tiếp
-    // (chỉ quét lại DB ở lần đầu, từ lần trùng thứ 2 chỉ +1 tiếp — giống NextHandoverNoAsync).
     var prefix = $"{day.Year % 100:D2}{day.Month:D2}";
     var sequence = int.Parse((await NextLoanNoAsync(db, day)).AsSpan(prefix.Length));
     for (var attempt = 0; attempt < 5; attempt++)
@@ -806,8 +713,6 @@ loans.MapPost("/", async (DeviceLoanRequest request, HttpContext context, WareHu
     }
     return Results.Conflict(new { error = "Không cấp được số phiếu, vui lòng thử lại" });
 });
-// Sửa thông tin phiếu TRƯỚC khi trả (đổi bộ phận, hạn trả, thêm/bớt thiết bị...) — không cho sửa borrowed_at/chữ ký
-// (chụp lại đúng thời điểm mượn, sửa lại sẽ sai bản chất bằng chứng đã ký).
 loans.MapPut("/{id:int}", async (int id, DeviceLoanUpdateRequest request, WareHubDbContext db) =>
 {
     var loan = await db.DeviceLoans.FindAsync(id);
@@ -822,8 +727,6 @@ loans.MapPut("/{id:int}", async (int id, DeviceLoanUpdateRequest request, WareHu
     await db.SaveChangesAsync();
     return Results.Ok(new { ok = true, id = loan.Id });
 });
-// Đánh dấu đã trả — ReturnedAt null nghĩa là đang mượn/quá hạn, khác null nghĩa là đã trả xong (xem cách tính trạng
-// thái ở GET / bên dưới). Không cho "trả" lại lần 2 (phải xoá phiếu nếu lỡ bấm nhầm rồi muốn mượn tiếp).
 loans.MapPut("/{id:int}/return", async (int id, DeviceLoanReturnRequest request, WareHubDbContext db) =>
 {
     var loan = await db.DeviceLoans.FindAsync(id);
@@ -843,8 +746,6 @@ loans.MapGet("/", async (string? search, string? status, int? page, int? pageSiz
         query = query.Where(x => x.No.Contains(term) || x.BorrowerName.Contains(term) || (x.Department ?? "").Contains(term) || (x.EmployeeId ?? "").Contains(term) || (x.CostCenter ?? "").Contains(term) || (x.Payload ?? "").Contains(term));
     }
     var now = DateTime.Now;
-    // Trạng thái không lưu cột riêng — tính thẳng từ returned_at/due_at mỗi lần truy vấn (chỉ 3 trạng thái, không cần
-    // lưu thừa 1 cột dễ lệch nếu quên cập nhật khi đổi due_at).
     if (status == "returned") query = query.Where(x => x.ReturnedAt != null);
     else if (status == "overdue") query = query.Where(x => x.ReturnedAt == null && x.DueAt != null && x.DueAt < now);
     else if (status == "borrowed") query = query.Where(x => x.ReturnedAt == null && (x.DueAt == null || x.DueAt >= now));
@@ -878,7 +779,6 @@ qr.MapGet("/devices/{deviceId:int}", async (int deviceId, int? size, WareHubDbCo
     using var generator = new QRCodeGenerator(); using var data = generator.CreateQrCode(payload, QRCodeGenerator.ECCLevel.M); var png = new PngByteQRCode(data).GetGraphic(Math.Max(pixels / 25, 4)); return Results.File(png, "image/png");
 });
 
-// Quản lý API Key (chỉ admin) — cấp cho người/hệ thống ngoài gọi 1 số API nhất định mà không cần tài khoản đăng nhập.
 var apiKeys = app.MapGroup("/api/apikeys").RequireAuthorization("admin");
 apiKeys.MapGet("/", async (WareHubDbContext db) => Results.Ok(new
 {
@@ -900,7 +800,6 @@ apiKeys.MapPost("/", async (ApiKeyCreateRequest request, HttpContext context, Wa
     var key = new ApiKey { Name = name!, KeyHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawKey))), Scopes = string.Join(',', scopes), CreatedByName = currentUser.FullName };
     db.ApiKeys.Add(key);
     await db.SaveChangesAsync();
-    // Chuỗi key gốc chỉ trả về ĐÚNG 1 LẦN này — sau đó CSDL chỉ còn bản băm, không lấy lại được nữa, mất thì phải tạo key mới.
     return Results.Created($"/api/apikeys/{key.Id}", new { id = key.Id, key = rawKey, name = key.Name, scopes });
 });
 apiKeys.MapDelete("/{id:int}", async (int id, WareHubDbContext db) =>
@@ -919,9 +818,6 @@ static bool IsMaintenanceExempt(HttpRequest request) =>
     || request.Path.Equals("/api/ready", StringComparison.OrdinalIgnoreCase)
     || (HttpMethods.IsGet(request.Method) && request.Path.Equals("/api/maintenance", StringComparison.OrdinalIgnoreCase))
     || (HttpMethods.IsPost(request.Method) && request.Path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase));
-// Ai được BỎ QUA chế độ bảo trì (admin/superadmin, để còn vào tắt bảo trì được) — dùng chung ở cả middleware (sau khi
-// đã có JWT/claims) lẫn /api/auth/login (trước khi có JWT, phải so trực tiếp Role trong DB) để chỉ có 1 chỗ định
-// nghĩa quy tắc này, đổi chính sách (vd thêm vai trò được miễn) chỉ cần sửa đúng 1 nơi.
 static bool IsMaintenanceExemptRole(string? role) => role is "admin" or "superadmin";
 
 static string? ValidateDevice(DeviceRequest request)
@@ -1000,20 +896,14 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
     await using var scope = scopes.CreateAsyncScope();
     var db = scope.ServiceProvider.GetRequiredService<WareHubDbContext>();
     var glpi = scope.ServiceProvider.GetRequiredService<GlpiClient>();
-    // Lưu kèm TÊN người chạy đồng bộ vào mỗi dòng lịch sử thay đổi thiết bị (DeviceHistory.ChangedByName) — không
-    // còn phụ thuộc join sang bảng Users, nên xoá tài khoản sau này không ảnh hưởng gì tới lịch sử đã ghi.
     var actorName = await db.Users.AsNoTracking().Where(x => x.Id == userId).Select(x => x.FullName).SingleOrDefaultAsync(ct) ?? "?";
     job.Report("lists");
 
-    // 5 danh sách hỏi song song. Máy tính là bắt buộc; điện thoại/tablet/màn hình/máy in lỗi (vd. sai đường dẫn) chỉ
-    // báo riêng loại đó, không làm hỏng phần đã lấy được.
     var computersTask = TryFetchAsync(() => glpi.GetComputersAsync(ct), ct);
     var phonesTask = TryFetchAsync(() => glpi.GetPhonesAsync(ct), ct);
     var tabletsTask = TryFetchAsync(() => glpi.GetTabletsAsync(ct), ct);
     var monitorsTask = TryFetchAsync(() => glpi.GetMonitorsAsync(ct), ct);
     var printersTask = TryFetchAsync(() => glpi.GetPrintersAsync(ct), ct);
-    // Chờ đủ cả 5 trước khi xét lỗi máy tính: nếu return sớm ngay khi computersTask lỗi, các request còn lại vẫn
-    // chạy ngầm không ai chờ/huỷ, chiếm connection pool tới khi tự timeout dù job đã báo "thất bại" cho người dùng.
     await Task.WhenAll(computersTask, phonesTask, tabletsTask, monitorsTask, printersTask);
     var (computers, computerError) = computersTask.Result;
     if (computerError is not null) { job.Fail(computerError); return; }
@@ -1022,9 +912,6 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
     var (monitors, monitorError) = monitorsTask.Result;
     var (printers, printerError) = printersTask.Result;
 
-    // GLPI gộp cả desktop lẫn laptop chung 1 loại tài sản "Computer" — phân biệt lại bằng trường "Type" (Computer type,
-    // vd xem Admin > Dropdowns > Assets > Computer type trong GLPI) nếu có ghi; không khớp/không có thì mặc định laptop
-    // (giữ đúng hành vi cũ, không đoán sai thành desktop cho những máy chưa gắn loại trong GLPI).
     var assets = computers.Select(c => (Asset: c, Loai: ComputerLoai(c), Kho: "24"))
         .Concat(phones.Select(p => (Asset: p, Loai: "phone", Kho: "12")))
         .Concat(tablets.Select(t => (Asset: t, Loai: "tablet", Kho: "24")))
@@ -1032,8 +919,6 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
         .Concat(printers.Select(p => (Asset: p, Loai: "printer", Kho: "24")))
         .ToList();
 
-    // Chi tiết từng máy tính (CPU/RAM/ổ cứng/IP/Windows/Office) và SIM điện thoại: mỗi máy phải hỏi riêng nên chạy song song có giới hạn.
-    // Lỗi ở phần này không làm hỏng việc đồng bộ danh sách; chỉ báo cảnh báo và giữ nguyên giá trị đang có.
     var detailReport = new GlpiDetailReport();
     var details = new Dictionary<int, GlpiComputerDetails>();
     var phoneDetails = new Dictionary<int, GlpiPhoneDetails>();
@@ -1046,8 +931,6 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
     if (glpi.DetailsEnabled && phones.Count > 0)
     {
         job.Report("phones");
-        // SIM không lấy theo từng máy nữa (nhiều bản GLPI không có đường dẫn liên kết trực tiếp đáng tin cậy) — lấy 1 lần
-        // toàn bộ danh sách SIM rồi khớp với điện thoại theo người đang dùng (GlpiParsers.MatchPhonesByUser).
         try
         {
             var simcards = await glpi.GetSimcardsAsync(ct);
@@ -1056,7 +939,6 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
         catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException) { detailReport.Warn("sim-all", $"Không lấy được danh sách SIM: {ex.Message}"); }
     }
     var detailed = 0;
-    // Điền phần chi tiết riêng của từng loại (máy tính: cấu hình; điện thoại: SIM); true nếu GLPI có trả gì đó.
     bool ApplyExtras(Device device, string loai, int glpiId)
     {
         if (loai is "laptop" or "desktop" && details.TryGetValue(glpiId, out var computer) && computer.HasAny) { ApplyDetails(device, computer); return true; }
@@ -1064,18 +946,14 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
         return false;
     }
 
-    // Không phân biệt hoa/thường như MySQL: nếu không, "abc" và "ABC" bị coi là 2 thiết bị, thêm mới rồi vỡ ràng buộc duy nhất.
     var existingBySerial = await db.Devices.ToDictionaryAsync(x => x.Ma, StringComparer.OrdinalIgnoreCase);
-    // Khớp theo id GLPI (ổn định, không đổi) là chính; số serial chỉ dùng để khớp 1 LẦN cho thiết bị CHƯA từng gắn
-    // glpi_id (vd. thiết bị tạo thủ công từ trước, hoặc lần đồng bộ đầu tiên sau khi nâng cấp) — sau đó gắn id vào để
-    // các lần sau không còn phụ thuộc số serial nữa, sửa seri bên GLPI không bị hiểu nhầm thành tài sản mới.
     var existingByGlpiKey = existingBySerial.Values
         .Where(x => x.GlpiId is not null && x.GlpiType is not null)
         .GroupBy(x => (x.GlpiType!, x.GlpiId!.Value))
         .ToDictionary(g => g.Key, g => g.First());
     var seenSerials = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     int created = 0, updated = 0, unchanged = 0, skipped = 0, duplicates = 0;
-    var skippedNames = new List<string>(); // tối đa 20 tên tài sản GLPI thiếu serial, để người dùng biết cần bổ sung ở đâu
+    var skippedNames = new List<string>();
 
     foreach (var (c, loai, kho) in assets)
     {
@@ -1088,10 +966,6 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
         }
         if (!seenSerials.Add(serial)) { duplicates++; continue; }
 
-        // Khớp theo id GLPI trước (ổn định qua việc sửa seri); chỉ dò theo serial cho thiết bị chưa từng gắn id GLPI nào.
-        // Desktop/laptop cùng xuất phát từ 1 itemtype "Computer" của GLPI — thiết bị đã đồng bộ trước khi có phân biệt
-        // desktop/laptop (hoặc GLPI vừa đổi lại Type) có thể đang lưu glpi_type là loai CŨ, nên thử luôn loai còn lại
-        // của nhóm computer trước khi coi là thiết bị MỚI (không thì đồng bộ tiếp sẽ tưởng là máy mới, tạo trùng serial).
         Device? existing = existingByGlpiKey.TryGetValue((loai, c.Id), out var byGlpi) ? byGlpi
             : loai is "laptop" or "desktop" && existingByGlpiKey.TryGetValue((loai == "laptop" ? "desktop" : "laptop", c.Id), out var byOtherComputerLoai) ? byOtherComputerLoai
             : existingBySerial.TryGetValue(serial, out var bySerial) && bySerial.GlpiId is null ? bySerial
@@ -1099,8 +973,6 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
 
         if (existing is not null)
         {
-            // Serial mới trùng với serial hiện tại của 1 thiết bị KHÁC trong hệ thống: không ghi đè chồng lên nhau
-            // (vỡ ràng buộc duy nhất) — bỏ qua, báo riêng để người dùng tự kiểm tra/sửa tay.
             if (!string.Equals(existing.Ma, serial, StringComparison.OrdinalIgnoreCase)
                 && existingBySerial.TryGetValue(serial, out var conflict) && conflict.Id != existing.Id)
             {
@@ -1112,8 +984,6 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
             existing.Ma = serial;
             existing.GlpiId = c.Id;
             existing.GlpiType = loai;
-            // Desktop/laptop do GLPI quyết định (không phải người dùng tự chọn tay như các loại khác) — luôn cập nhật
-            // lại Loai hiển thị theo đúng Type mới nhất từ GLPI, để máy cũ gắn sai từ trước cũng tự sửa lại.
             if (loai is "laptop" or "desktop" && existing.Loai is "laptop" or "desktop") existing.Loai = loai;
             ApplyGlpiAsset(existing, c);
             if (ApplyExtras(existing, loai, c.Id)) detailed++;
@@ -1137,14 +1007,12 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
     job.Complete(new { ok = true, total = assets.Count, computers = computers.Count, phones = phones.Count, phone_error = phoneError, tablets = tablets.Count, tablet_error = tabletError, monitors = monitors.Count, monitor_error = monitorError, printers = printers.Count, printer_error = printerError, created, updated, unchanged, skipped, skipped_names = skippedNames, duplicates, detailed, detail_warnings = detailReport.Warnings });
 }
 static IResult GlpiNotConfigured() => Results.BadRequest(new { error = "Chưa cấu hình kết nối GLPI. Thêm mục \"Glpi\" (BaseUrl, ClientId, ClientSecret, Username, Password) vào appsettings.Development.json." });
-// Chạy 1 lần kiểm tra GLPI cho admin: báo chưa cấu hình / lỗi kết nối bằng thông báo rõ ràng thay vì lỗi 500.
 static async Task<IResult> GlpiProbeAsync<T>(GlpiClient glpi, Func<Task<T>> probe)
 {
     if (!glpi.IsConfigured) return GlpiNotConfigured();
     try { return Results.Ok(await probe()); }
     catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status502BadGateway); }
 }
-// Lấy 1 danh sách từ GLPI; lỗi cấu hình/mạng/quá thời gian trả về dạng (danh sách rỗng, thông báo) thay vì ném ra ngoài.
 static async Task<(List<GlpiAsset> Items, string? Error)> TryFetchAsync(Func<Task<List<GlpiAsset>>> fetch, CancellationToken ct)
 {
     try { return (await fetch(), null); }
@@ -1152,17 +1020,10 @@ static async Task<(List<GlpiAsset> Items, string? Error)> TryFetchAsync(Func<Tas
     catch (HttpRequestException ex) { return ([], $"Không kết nối được tới GLPI: {ex.Message}"); }
     catch (TaskCanceledException) when (!ct.IsCancellationRequested) { return ([], "Không kết nối được tới GLPI: hết thời gian chờ"); }
 }
-// "Computer" trong GLPI gộp chung desktop và laptop — asset.Type là trường "Computer type" (GLPI: Admin > Dropdowns >
-// Assets > Computer type), chứa tên như "Desktop"/"Laptop"/"Server"... Chỉ nhận diện "desktop" qua tên (không phân biệt
-// hoa/thường, khớp chứa chuỗi — phòng trường hợp công ty đặt tên khác đi 1 chút, vd "Desktop PC"); mọi trường hợp khác
-// (kể cả chưa gắn loại) giữ nguyên "laptop" như hành vi cũ, không tự đoán khi không chắc.
 static string ComputerLoai(GlpiAsset asset) =>
     asset.Type?.Name is { } typeName && typeName.Contains("desktop", StringComparison.OrdinalIgnoreCase) ? "desktop" : "laptop";
-// Thông tin chung của 1 tài sản GLPI (tên, model, hãng, người dùng, vị trí, ghi chú) chép vào thiết bị — dùng cho cả thêm mới lẫn cập nhật.
 static void ApplyGlpiAsset(Device device, GlpiAsset asset)
 {
-    // GLPI không có giá trị cho 1 trường thì giữ nguyên giá trị đang có (không xoá dữ liệu đã nhập tay) — giống cách
-    // ApplyDetails/ApplyPhoneDetails đang làm, trước đây hàm này ghi đè thẳng nên lỡ sửa tay rồi đồng bộ lại là mất.
     if (Truncate(asset.Name, 150) is { } name) device.Ten = name;
     device.Model = Truncate(asset.Model?.Name, 150) ?? device.Model;
     device.Producer = Truncate(asset.Manufacturer?.Name, 100) ?? device.Producer;
@@ -1170,7 +1031,6 @@ static void ApplyGlpiAsset(Device device, GlpiAsset asset)
     device.PhongBan = Truncate(asset.Location?.Name, 100) ?? device.PhongBan;
     device.GhiChu = Truncate(asset.Comment, 500) ?? device.GhiChu;
 }
-// Chép chi tiết đọc từ GLPI vào thiết bị. GLPI không trả gì cho 1 mục thì giữ nguyên giá trị đang có (không xoá dữ liệu đã nhập tay).
 static void ApplyPhoneDetails(Device device, GlpiPhoneDetails details)
 {
     device.PhoneNumber = Truncate(details.PhoneNumber, 30) ?? device.PhoneNumber;
@@ -1187,30 +1047,17 @@ static void ApplyDetails(Device device, GlpiComputerDetails details)
 }
 static List<(string Field, string? OldValue, string? NewValue)> DiffDevice(Dictionary<string, string?> before, Dictionary<string, string?> after) =>
     before.Where(entry => entry.Value != after[entry.Key]).Select(entry => (entry.Key, entry.Value, after[entry.Key])).ToList();
-// Ghi lại từng trường thiết bị đã đổi (không làm gì nếu không có thay đổi); người gọi tự SaveChanges.
 static void RecordDeviceChanges(WareHubDbContext db, int deviceId, int userId, string actorName, List<(string Field, string? OldValue, string? NewValue)> changes) =>
     db.DeviceHistory.AddRange(changes.Select(c => new DeviceHistory { DeviceId = deviceId, UserId = userId, ChangedByName = actorName, FieldName = c.Field, OldValue = ClipHistory(c.OldValue), NewValue = ClipHistory(c.NewValue) }));
-// Cột lịch sử chỉ chứa 255 ký tự trong khi ghi chú dài tới 500: cắt bớt để lưu lịch sử không làm hỏng cả lần lưu/đồng bộ.
 static string? ClipHistory(string? value) => value is { Length: > 255 } ? value[..255] : value;
-// Phân trang dùng chung: trang tối thiểu 1, số dòng mỗi trang trong khoảng 1..100.
 static (int Page, int Limit) ParsePaging(int? page, int? pageSize, int defaultSize) => (Math.Max(page ?? 1, 1), Math.Clamp(pageSize ?? defaultSize, 1, 100));
 static int TotalPages(int total, int limit) => Math.Max((int)Math.Ceiling(total / (double)limit), 1);
-// Nội dung phiếu (bàn giao, mượn thiết bị...) là JSON tự do do trang web gửi lên; chỉ nhận object và giới hạn
-// dung lượng để không nhét rác vào DB. Dùng chung cho mọi loại phiếu có cột Payload dạng JSON.
 static string? JsonPayload(JsonElement? data) =>
     data is { ValueKind: JsonValueKind.Object } value && value.GetRawText().Length <= 16_000 ? value.GetRawText() : null;
-// Điện thoại/tablet dùng chung 1 dãy số riêng với máy tính — không phải loại thiết bị nào cũng cùng 1 lô giấy in sẵn.
 static string HandoverKind(string? loai) => loai is "phone" or "tablet" ? "mobile" : "computer";
-// Số phiếu bàn giao dạng YYMMxxx: 2609001 = năm 26, tháng 09, phiếu thứ 001 của tháng đó. Máy tính và điện thoại/tablet
-// giờ dùng CHUNG 1 khung phiếu in (xem HandoverSheet.jsx) nên cũng tăng tuần tự CHUNG 1 dãy số, không tách riêng theo
-// "kind" nữa như trước — "kind" vẫn giữ lại trên mỗi phiếu để lọc theo loại ở trang Phiếu bàn giao, chỉ không còn dùng
-// để chia dãy số. Khoá duy nhất vẫn là (no, kind) (xem WareHubDbContext) — không đổi gì, phiếu MỚI từ nay dùng chung 1
-// dãy số nên không bao giờ trùng no dù khác kind; phiếu CŨ trước đây có thể đã trùng no giữa 2 kind, vẫn phân biệt được.
 static async Task<string> NextHandoverNoAsync(WareHubDbContext db, DateOnly day)
 {
     var prefix = $"{day.Year % 100:D2}{day.Month:D2}";
-    // Lấy hết số của tháng (MỌI kind) rồi tự đọc số lớn nhất ở client (thay vì sort chuỗi lấy 1 dòng cuối): phiếu "số
-    // liệu cũ" lấy từ trường Delivery form tự do bên GLPI không chắc đúng dạng số, int.Parse thẳng có thể lỗi 500 nếu dính rác.
     var nos = await db.Handovers.AsNoTracking().Where(x => x.No.StartsWith(prefix)).Select(x => x.No).ToListAsync();
     var maxSequence = nos
         .Select(no => int.TryParse(no.AsSpan(prefix.Length), out var n) ? n : (int?)null)
@@ -1220,8 +1067,6 @@ static async Task<string> NextHandoverNoAsync(WareHubDbContext db, DateOnly day)
         .Max();
     return $"{prefix}{maxSequence + 1:D3}";
 }
-// Số phiếu mượn thiết bị dạng YYMMxxx — dãy số RIÊNG của bảng device_loans (độc lập hoàn toàn với Handover, 2 bảng
-// khác nhau nên không lo trùng "no" giữa phiếu mượn và phiếu bàn giao dù cùng tháng). Logic giống hệt NextHandoverNoAsync.
 static async Task<string> NextLoanNoAsync(WareHubDbContext db, DateOnly day)
 {
     var prefix = $"{day.Year % 100:D2}{day.Month:D2}";
@@ -1234,11 +1079,8 @@ static async Task<string> NextLoanNoAsync(WareHubDbContext db, DateOnly day)
         .Max();
     return $"{prefix}{maxSequence + 1:D3}";
 }
-// Chuỗi từ người ngoài đưa vào nhật ký: bỏ ký tự điều khiển (xuống dòng...) và giới hạn độ dài để không giả được dòng log.
 static string LogSafe(string? value) => value is null ? "" : new string(value.Where(c => !char.IsControl(c)).Take(100).ToArray());
-// Cắt chuỗi người dùng gửi lên (tìm kiếm...) về độ dài tối đa để không ai bắt máy chủ quét LIKE với chuỗi khổng lồ.
 static string? ClampText(string? value, int max) => value is not null && value.Length > max ? value[..max] : value;
-// Dấu vân tay trạng thái đăng nhập của tài khoản (mật khẩu + vai trò), ghi vào token; đổi 1 trong 2 thì token cũ mất hiệu lực.
 static string SessionStamp(User user) => Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes($"{user.PasswordHash}|{user.Role}")))[..22];
 static void AuditUserAction(ILogger logger, HttpContext context, string action, string target, string detail) =>
     logger.LogWarning("AUDIT {Actor} đã {Action} người dùng {Target} {Detail} (ip {Ip})", ((User)context.Items["CurrentUser"]!).Username, action, target, detail, context.Connection.RemoteIpAddress);
@@ -1259,15 +1101,12 @@ static string CreateToken(User user, IConfiguration config)
         new("full_name", user.FullName),
         new("stamp", SessionStamp(user)),
     };
-    // superadmin kế thừa mọi quyền của admin: thêm luôn claim "admin" để các chỗ đang RequireAuthorization("admin")
-    // không phải sửa lại hết — IsInRole() khớp bất kỳ claim Role nào trùng tên, không giới hạn 1 claim/token.
     if (user.Role == "superadmin") claims.Add(new Claim(ClaimTypes.Role, "admin"));
     var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["Jwt:Secret"]!));
     var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
     var expires = DateTime.UtcNow.AddHours(config.GetValue("Jwt:ExpiresInHours", 8));
     return new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(JwtIssuer, JwtAudience, claims, expires: expires, signingCredentials: credentials));
 }
-// Chờ MySQL sẵn sàng (tối đa 20 lần, cách nhau 2 giây) rồi tạo/bổ sung schema và tài khoản admin mặc định.
 static async Task InitializeDatabaseAsync(IServiceProvider services, IConfiguration configuration)
 {
     await using var scope = services.CreateAsyncScope();
@@ -1312,14 +1151,7 @@ static async Task EnsureSchemaAsync(WareHubDbContext db)
     await EnsureIndexAsync(db, "handovers", "IX_handovers_CreatedAt", "`created_at`");
     await EnsureDeviceLoanTableAsync(db);
     await EnsureIndexAsync(db, "device_loans", "IX_device_loans_CreatedAt", "`created_at`");
-    // Luồng "kích hoạt" (is_active=0 chờ duyệt rồi mới in/bàn giao được) đã bỏ hẳn — API /activate từng dùng để
-    // chuyển trạng thái này không còn nữa, và /api/print cũng không lọc is_active nữa (xem code endpoint đó). Thiết
-    // bị TẠO MỚI từ nay luôn is_active=true (ToDevice), nhưng thiết bị cũ tạo từ TRƯỚC lần nâng cấp này mà còn đang
-    // is_active=0 sẽ bị kẹt vĩnh viễn (không còn cách nào set lại qua UI/API) — cập nhật 1 lần cho đúng bất biến mới,
-    // không thì chạy vô hại (không còn dòng nào is_active=0 thì không đổi gì).
     await db.Database.ExecuteSqlRawAsync("UPDATE devices SET is_active = 1 WHERE is_active = 0");
-    // Chỉ mục thừa/không còn dùng — idx_devices_loai và idx_devices_phong_ban trùng cột với IX_devices_Loai/IX_devices_PhongBan ở trên (tạo ra ngoài code trước đây);
-    // IX_devices_IsActive vô dụng từ khi mọi thiết bị luôn is_active = true (không còn giá trị nào khác để lọc). Giữ lại chỉ khiến mỗi lần ghi thiết bị chậm hơn, không giúp gì cho truy vấn.
     await EnsureIndexDroppedAsync(db, "devices", "idx_devices_loai");
     await EnsureIndexDroppedAsync(db, "devices", "idx_devices_phong_ban");
     await EnsureIndexDroppedAsync(db, "devices", "IX_devices_IsActive");
@@ -1328,9 +1160,6 @@ static async Task SeedDefaultAdminAsync(WareHubDbContext db, IServiceProvider se
 {
     if (await db.Users.AnyAsync())
     {
-        // Hệ thống đã có người dùng từ trước khi có vai trò superadmin: tự nâng tài khoản admin lâu đời nhất lên
-        // superadmin (chỉ 1 lần, khi chưa ai có vai trò này) — không làm qua API vì admin không được tự đổi vai trò
-        // chính mình, nên nếu không tự động ở đây sẽ không ai nâng được tài khoản admin gốc duy nhất đang có.
         if (!await db.Users.AnyAsync(x => x.Role == "superadmin"))
         {
             var oldestAdmin = await db.Users.Where(x => x.Role == "admin").OrderBy(x => x.CreatedAt).FirstOrDefaultAsync();
@@ -1350,7 +1179,6 @@ static async Task SeedDefaultAdminAsync(WareHubDbContext db, IServiceProvider se
     db.Users.Add(user);
     await db.SaveChangesAsync();
 }
-// Các câu kiểm tra schema dùng chung cho các hàm Ensure* bên dưới.
 static async Task<bool> ColumnExistsAsync(WareHubDbContext db, string table, string column) =>
     await db.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS `Value` FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = {0} AND column_name = {1}", table, column).SingleAsync() > 0;
 static async Task<bool> TableExistsAsync(WareHubDbContext db, string table) =>
@@ -1374,7 +1202,7 @@ static async Task EnsureDeviceColumnAsync(WareHubDbContext db, string columnName
     };
     await db.Database.ExecuteSqlRawAsync(sql);
 }
-#pragma warning disable EF1002 // table/indexName/columnExpression are always hardcoded call-site literals from EnsureSchemaAsync above, never user input
+#pragma warning disable EF1002
 static async Task EnsureIndexAsync(WareHubDbContext db, string table, string indexName, string columnExpression)
 {
     if (!await IndexExistsAsync(db, table, indexName))
@@ -1385,11 +1213,6 @@ static async Task EnsureIndexDroppedAsync(WareHubDbContext db, string table, str
     if (await IndexExistsAsync(db, table, indexName))
         await db.Database.ExecuteSqlRawAsync($"DROP INDEX `{indexName}` ON `{table}`");
 }
-// Tên khoá ngoại không cố định (có thể do EF EnsureCreated đặt tự động, hoặc do CREATE TABLE tay đặt tên khác) — dò theo
-// cột tham chiếu trong information_schema rồi xoá đúng tên tìm được, không đoán trước 1 tên cụ thể. Khác với
-// EnsureIndexAsync/EnsureIndexDroppedAsync ở trên (chuỗi nội suy luôn là literal cố định tại nơi gọi), "name" ở đây đọc
-// từ CSDL lúc chạy — không phải input người dùng, nhưng vẫn kiểm tra đúng dạng tên định danh MySQL trước khi nội suy,
-// không dựa vào suy luận "chắc an toàn" như lý do miễn cảnh báo EF1002 phía trên.
 #pragma warning disable EF1002
 static async Task DropForeignKeysOnColumnAsync(WareHubDbContext db, string table, string column)
 {
@@ -1402,7 +1225,6 @@ static async Task DropForeignKeysOnColumnAsync(WareHubDbContext db, string table
 #pragma warning restore EF1002
 static async Task EnsureHandoverTableAsync(WareHubDbContext db)
 {
-    // Khoá duy nhất gộp (no, kind) — máy tính và điện thoại/tablet đếm số riêng, được phép ra cùng 1 chuỗi "no".
     await db.Database.ExecuteSqlRawAsync("""
         CREATE TABLE IF NOT EXISTS handovers (
             Id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -1446,15 +1268,11 @@ static async Task EnsureDeviceLoanTableAsync(WareHubDbContext db)
             """);
         return;
     }
-    // Bảng tạo từ bản trước khi có 2 cột này (mã số nhân viên, cost center của người mượn) — bổ sung thêm cho DB cũ.
     if (!await ColumnExistsAsync(db, "device_loans", "employee_id"))
         await db.Database.ExecuteSqlRawAsync("ALTER TABLE device_loans ADD COLUMN employee_id VARCHAR(50) NULL AFTER department");
     if (!await ColumnExistsAsync(db, "device_loans", "cost_center"))
         await db.Database.ExecuteSqlRawAsync("ALTER TABLE device_loans ADD COLUMN cost_center VARCHAR(50) NULL AFTER employee_id");
 }
-// Tách dãy số riêng cho máy tính/điện thoại-tablet (xem HandoverKind, NextHandoverNoAsync): thêm cột "kind", dò lại
-// giá trị cho các phiếu đã có sẵn trước khi có cột này (theo thiết bị đã gắn, hoặc cờ "kind":"phone" cũ trong Payload
-// nếu thiết bị đã bị xoá/không gắn), rồi đổi khoá duy nhất từ chỉ "no" sang gộp (no, kind).
 static async Task EnsureHandoverKindColumnAsync(WareHubDbContext db)
 {
     if (!await ColumnExistsAsync(db, "handovers", "kind"))
@@ -1474,7 +1292,6 @@ static async Task EnsureHandoverKindColumnAsync(WareHubDbContext db)
 static async Task EnsureDeviceHistoryTableAsync(WareHubDbContext db)
 {
     if (await TableExistsAsync(db, "device_history")) return;
-    // Không có khoá ngoại tới users (xem EnsureHistoryActorNameColumnsAsync) — tên người sửa chụp sẵn vào changed_by_name.
     await db.Database.ExecuteSqlRawAsync("""
         CREATE TABLE device_history (
             Id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -1491,9 +1308,6 @@ static async Task EnsureDeviceHistoryTableAsync(WareHubDbContext db)
         )
         """);
 }
-// Tài khoản bị xoá không còn bị chặn bởi lịch sử in tem/sửa thiết bị (trước đây dùng khoá ngoại Restrict trên user_id) —
-// bỏ khoá ngoại đó (nếu DB cũ còn) và thêm cột *_by_name chụp sẵn tên người thực hiện ngay lúc ghi, không cần bảng users
-// còn tồn tại để hiển thị lịch sử. Chạy lại vô hại (mọi bước đều tự kiểm tra trước khi đổi).
 static async Task EnsureHistoryActorNameColumnsAsync(WareHubDbContext db)
 {
     await DropForeignKeysOnColumnAsync(db, "print_history", "user_id");
@@ -1531,10 +1345,6 @@ static async Task EnsureApiKeyTableAsync(WareHubDbContext db)
         )
         """);
 }
-// Khoá "scope" (tên quyền) -> (tiền tố đường dẫn, các phương thức HTTP được phép) mà quyền đó mở khoá cho API Key.
-// Thêm quyền mới cho API Key chỉ cần thêm 1 dòng ở đây (không cần sửa gì ở endpoint đích — endpoint chỉ cần đã
-// RequireAuthorization() như thường lệ). Giới hạn theo method để 1 scope "chỉ xem" (vd "handovers") không vô tình
-// mở luôn cả tạo/sửa/xoá chỉ vì chung 1 nhóm đường dẫn.
 static class ApiKeyScope
 {
     public static readonly Dictionary<string, (string PathPrefix, string[] Methods)> Definitions = new()

@@ -2,12 +2,6 @@ using System.Collections.Concurrent;
 
 namespace WareHub.Api.Services;
 
-/// <summary>
-/// Chặn dò mật khẩu: đăng nhập sai nhiều lần thì khoá tạm, mỗi lần bị khoá lại thì thời gian khoá tăng gấp đôi.
-/// Hai lớp: theo cặp (địa chỉ IP, tên đăng nhập) để chặn dò 1 tài khoản, và theo riêng địa chỉ IP để chặn dò nhiều tài khoản.
-/// Cố ý KHÔNG khoá theo riêng tên đăng nhập: nếu không, kẻ tấn công chỉ cần gõ sai tên admin liên tục là admin thật cũng bị khoá.
-/// Bộ đếm nằm trong bộ nhớ (mỗi bản chạy có bộ đếm riêng, khởi động lại thì xoá) — đủ cho việc chặn tấn công vét cạn.
-/// </summary>
 public sealed class LoginGuard
 {
     private const int MaxFailuresPerPair = 5;
@@ -15,7 +9,7 @@ public sealed class LoginGuard
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan BaseLock = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan MaxLock = TimeSpan.FromHours(1);
-    private const int MaxEntries = 50_000; // chặn kẻ tấn công làm phình bộ nhớ bằng vô số tên đăng nhập khác nhau
+    private const int MaxEntries = 50_000;
 
     private sealed class Entry
     {
@@ -34,7 +28,6 @@ public sealed class LoginGuard
     private static string PairKey(string ip, string username) => $"p|{ip}|{username.Trim().ToLowerInvariant()}";
     private static string IpKey(string ip) => $"i|{ip}";
 
-    /// <summary>Còn bị khoá bao lâu (null = được phép thử).</summary>
     public TimeSpan? RemainingLock(string ip, string username)
     {
         var now = _now();
@@ -55,7 +48,6 @@ public sealed class LoginGuard
         Bump(IpKey(ip), MaxFailuresPerIp);
     }
 
-    /// <summary>Đăng nhập đúng: xoá bộ đếm của cặp này (bộ đếm theo IP vẫn giữ để chặn kẻ thử nhiều tài khoản).</summary>
     public void RecordSuccess(string ip, string username) => _entries.TryRemove(PairKey(ip, username), out _);
 
     private void Bump(string key, int limit)
@@ -84,11 +76,6 @@ public sealed class LoginGuard
             lock (entry)
                 if (entry.LockedUntil <= now && now - entry.WindowStart > Window) _entries.TryRemove(key, out _);
 
-        // Kẻ tấn công đổi liên tục sang (ip, username) CHƯA từng gặp trong vòng 15 phút thì không entry nào ở trên đủ
-        // "cũ" để bị xoá (WindowStart luôn mới) — vòng lặp trên không chặn được phình bộ nhớ trong trường hợp này, và
-        // mỗi lần gọi Prune() lại quét toàn bộ (ngày càng chậm) mà không dọn được gì. Vượt mốc an toàn thì xoá cứng bớt
-        // (bỏ qua window), ưu tiên giữ lại entry đang khoá (quan trọng hơn cho việc chặn dò mật khẩu), xoá dư xuống còn
-        // 75% mốc để không phải Prune lại ngay ở lần RecordFailure kế tiếp.
         if (_entries.Count > MaxEntries)
         {
             var toTrim = _entries.Count - MaxEntries * 3 / 4;

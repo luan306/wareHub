@@ -1,4 +1,3 @@
-// Trang Mượn thiết bị và hộp thoại lập phiếu. Nội dung in trên phiếu (LoanSheet) không dịch (giống phiếu bàn giao).
 export const loans = {
   'lp.title': ['Mượn thiết bị', 'Equipment loans'],
   'lp.newSlip': ['+ Lập phiếu mượn', '+ New loan slip'],

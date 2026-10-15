@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Triển khai blue-green cho WareHub (xem deploy/docker-compose.yml).
-#
-#   ./bluegreen.sh deploy     Dựng bản mới lên bộ đang rảnh, kiểm tra, rồi chuyển lưu lượng. Bản cũ giữ nguyên để quay lại.
-#   ./bluegreen.sh rollback   Chuyển lưu lượng về bản trước ngay lập tức.
-#   ./bluegreen.sh status     Xem bộ nào đang phục vụ, phiên bản của từng bộ.
-#   ./bluegreen.sh cleanup    Tắt bộ không còn phục vụ (sau khi chắc chắn bản mới ổn) để nhường tài nguyên.
-#
-# Trong lúc `deploy`, bản hiện tại vẫn phục vụ bình thường; nếu bản mới không lên được thì KHÔNG chuyển lưu lượng.
-# Chạy trên máy chủ đã cài Docker, từ thư mục deploy/ (đã có file .env). Windows: dùng Git Bash hoặc WSL.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-DOCKER="${DOCKER:-docker}"            # đổi được để chạy thử (xem docs)
+DOCKER="${DOCKER:-docker}"
 STATE_DIR="${STATE_DIR:-./state}"
-READY_TIMEOUT="${READY_TIMEOUT:-120}" # giây chờ bản mới sẵn sàng
-FORCE="${FORCE:-0}"                   # FORCE=1: vẫn chuyển dù phiên bản không đổi
+READY_TIMEOUT="${READY_TIMEOUT:-120}"
+FORCE="${FORCE:-0}"
+
+usage() {
+  cat <<'EOF'
+  ./bluegreen.sh deploy     Dựng bản mới lên bộ đang rảnh, kiểm tra, rồi chuyển lưu lượng. Bản cũ giữ nguyên để quay lại.
+  ./bluegreen.sh rollback   Chuyển lưu lượng về bản trước ngay lập tức.
+  ./bluegreen.sh status     Xem bộ nào đang phục vụ, phiên bản của từng bộ.
+  ./bluegreen.sh cleanup    Tắt bộ không còn phục vụ (sau khi chắc chắn bản mới ổn) để nhường tài nguyên.
+EOF
+}
 
 log()  { printf '\033[1;34m[bluegreen]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[bluegreen]\033[0m %s\n' "$*"; }
@@ -25,12 +25,10 @@ compose() { $DOCKER compose "$@"; }
 other()   { if [ "$1" = blue ]; then echo green; else echo blue; fi; }
 active()  { if [ -f "$STATE_DIR/active" ]; then cat "$STATE_DIR/active"; else echo none; fi; }
 
-# Gọi HTTP từ BÊN TRONG container gateway (cùng mạng nội bộ với web-blue / web-green).
 probe()      { compose exec -T gateway wget -qO- -T 5 "$1" 2>/dev/null; }
 json_field() { sed -n "s/.*\"$1\":\"\{0,1\}\([^\",}]*\).*/\1/p"; }
 version_of() { probe "http://web-$1/api/ready" | json_field version || true; }
 
-# Bộ $1 sẵn sàng khi: backend nối được cơ sở dữ liệu (/api/ready) VÀ web trả về trang chủ.
 is_ready() {
   probe "http://web-$1/api/ready" | grep -q '"ready":true' && probe "http://web-$1/" | grep -q 'id="root"'
 }
@@ -45,8 +43,6 @@ wait_ready() {
   return 1
 }
 
-# Đổi bộ nhận lưu lượng sang $1 (bộ cũ là $2). Ghi file tạm rồi đổi tên nguyên tử; nginx -t trước khi nạp lại,
-# lỗi cấu hình thì khôi phục file cũ và dừng — gateway không bao giờ nạp một cấu hình hỏng.
 switch_to() {
   local target="$1" previous="${2:-}"
   mkdir -p "$STATE_DIR"
@@ -63,7 +59,6 @@ switch_to() {
   log "Lưu lượng đã chuyển sang: $target"
 }
 
-# Sau khi chuyển: gọi qua gateway nhiều lần, phiên bản trả về phải là bản mới và luôn sẵn sàng.
 verify_through_gateway() {
   local expected="$1" i got
   for i in 1 2 3 4 5 6 7 8; do
@@ -131,7 +126,7 @@ cmd_rollback() {
   [ -n "$previous" ] || previous="$(other "$current")"
 
   log "Quay lại $previous (đang phục vụ: $current)..."
-  compose up -d --no-deps "backend-$previous" "web-$previous"   # bật lại nếu đã bị cleanup
+  compose up -d --no-deps "backend-$previous" "web-$previous"
   wait_ready "$previous" || die "Bộ $previous không sẵn sàng; giữ nguyên $current."
   local v; v="$(version_of "$previous")"
   switch_to "$previous" "$current"
@@ -162,5 +157,5 @@ case "${1:-}" in
   rollback) cmd_rollback ;;
   status)   cmd_status ;;
   cleanup)  cmd_cleanup ;;
-  *) sed -n '2,10p' "$0"; exit 1 ;;
+  *) usage; exit 1 ;;
 esac

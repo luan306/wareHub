@@ -22,9 +22,6 @@ public sealed class GlpiAsset
     public GlpiRef? Model { get; set; }
     public GlpiRef? Type { get; set; }
     public GlpiRef? Location { get; set; }
-    // Mọi trường JSON không khớp property nào ở trên (vd SIM có "msin" — Mobile Subscriber Identification Number — không
-    // có sẵn chỗ chứa riêng): giữ lại thô để đọc thử theo nhiều tên trường khác nhau bằng ExtraString, không cần biết
-    // trước chính xác GLPI đặt tên gì.
     [System.Text.Json.Serialization.JsonExtensionData]
     public Dictionary<string, JsonElement>? Extra { get; set; }
 
@@ -41,16 +38,8 @@ public sealed class GlpiAsset
     }
 }
 
-/// <summary>
-/// Gọi GLPI High-Level REST API (OAuth2 "password" grant) để lấy danh sách máy tính (Computer).
-/// Token được cache trong bộ nhớ tới khi gần hết hạn thì tự xin lại — không cần đăng nhập lại mỗi lần gọi.
-/// </summary>
 public sealed partial class GlpiClient(HttpClient http, IOptions<GlpiOptions> optionsAccessor, ILogger<GlpiClient> logger)
 {
-    // PropertyNamingPolicy khớp đúng quy ước snake_case chung của cả app (xem ConfigureHttpJsonOptions trong
-    // Program.cs) — không dùng chung được 1 JsonSerializerOptions với chỗ đó vì đây là options riêng để tự gọi
-    // JsonSerializer.Deserialize thủ công (không qua model binding của ASP.NET Core), và cần thêm
-    // PropertyNameCaseInsensitive=true riêng cho GLPI (các bản GLPI khác nhau viết hoa/thường tên trường không đều).
     private static readonly JsonSerializerOptions SnakeCaseJson = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -63,7 +52,6 @@ public sealed partial class GlpiClient(HttpClient http, IOptions<GlpiOptions> op
 
     public bool IsConfigured => _options.IsConfigured;
 
-    // Token dùng chung cho nhiều yêu cầu song song: chỉ 1 luồng xin token mới, các luồng khác chờ rồi dùng lại.
     private readonly SemaphoreSlim _tokenLock = new(1, 1);
 
     private void InvalidateToken() => _tokenExpiresAt = DateTimeOffset.MinValue;
@@ -87,7 +75,6 @@ public sealed partial class GlpiClient(HttpClient http, IOptions<GlpiOptions> op
 
     private async Task<string> RequestTokenAsync(CancellationToken ct)
     {
-
         var request = new HttpRequestMessage(HttpMethod.Post, $"{_options.BaseUrl}/token");
         var basicAuth = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_options.ClientId}:{_options.ClientSecret}"));
         request.Headers.Authorization = new AuthenticationHeaderValue("Basic", basicAuth);
@@ -114,7 +101,7 @@ public sealed partial class GlpiClient(HttpClient http, IOptions<GlpiOptions> op
         var expiresIn = root.TryGetProperty("expires_in", out var expiresEl) ? expiresEl.GetInt32() : 3600;
 
         _cachedToken = accessToken;
-        _tokenExpiresAt = DateTimeOffset.UtcNow.AddSeconds(Math.Max(expiresIn - 30, 30)); // trừ hao 30s cho an toàn
+        _tokenExpiresAt = DateTimeOffset.UtcNow.AddSeconds(Math.Max(expiresIn - 30, 30));
         return accessToken;
     }
 
@@ -149,9 +136,6 @@ public sealed partial class GlpiClient(HttpClient http, IOptions<GlpiOptions> op
         return await GetAssetsAsync(endpoint, "máy tính bảng", ct);
     }
 
-    // SIM không gắn trực tiếp vào máy qua API (không có "/Assets/Phone/{id}/.../Simcard" đáng tin cậy — thử thì GLPI trả lỗi
-    // ở nhiều bản). Thay vào đó lấy TOÀN BỘ danh sách SIM 1 lần rồi khớp với điện thoại theo NGƯỜI ĐANG DÙNG (xem
-    // GlpiParsers.MatchPhonesByUser) — không cần biết đúng cấu trúc liên kết SIM↔điện thoại của từng bản GLPI.
     public async Task<List<GlpiAsset>> GetSimcardsAsync(CancellationToken ct = default)
     {
         var endpoint = Blank(_options.SimcardListEndpoint);
@@ -168,16 +152,12 @@ public sealed partial class GlpiClient(HttpClient http, IOptions<GlpiOptions> op
         List<string> errors = [];
         foreach (var candidate in candidates)
         {
-            // Bắt cả lỗi mạng/JSON hỏng (không chỉ InvalidOperationException) — 1 candidate lỗi mạng tạm thời không được
-            // làm dừng hẳn việc thử các candidate còn lại, vẫn phải thử tới cùng như khi candidate đó trả 404.
             try { return await GetAssetsAsync(candidate, "SIM", ct); }
             catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException or JsonException or TaskCanceledException) { errors.Add($"{candidate}: {ex.Message}"); }
         }
         throw new InvalidOperationException($"Không tìm được danh sách SIM trong GLPI (đã thử: {string.Join(" | ", candidates)}). Đặt Glpi:SimcardListEndpoint cho đúng.");
     }
 
-    // GLPI chỉ trả tối đa `limit` dòng mỗi lần, nên phải lặp theo start cho tới khi hết. Dừng khi một trang không
-    // thêm được id mới nào (phòng trường hợp máy chủ bỏ qua start/limit và trả lại trang đầu mãi).
     private async Task<List<GlpiAsset>> GetAssetsAsync(string endpoint, string label, CancellationToken ct)
     {
         if (!IsConfigured)

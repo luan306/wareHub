@@ -22,12 +22,10 @@ const RESPONSIBILITIES = [
   'Any missing or different components will be fine as their prices in the present.',
 ];
 
-// Phiếu bàn giao điện thoại: cùng mẫu nhưng bỏ 2 điều khoản về phần cứng/phần mềm của máy tính.
 const PHONE_RESPONSIBILITIES = RESPONSIBILITIES.filter(
   (item) => typeof item !== 'string' || !/mustn't (change the hardware|install any software)/.test(item),
 );
 
-// 2022-09-06 -> 6/9/2022, giống định dạng trên mẫu phiếu giấy.
 function formatDayMonthYear(iso) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
   return match ? `${Number(match[3])}/${Number(match[2])}/${match[1]}` : iso || '';
@@ -36,7 +34,6 @@ function formatDayMonthYear(iso) {
 export function buildHandoverData(device) {
   const isPhone = device.loai === 'phone';
   return {
-    // 'phone' dùng mẫu phiếu điện thoại; phiếu cũ đã lưu không có trường này nên vẫn là mẫu máy tính.
     kind: isPhone ? 'phone' : 'computer',
     register_date: isoToday(),
     no: '',
@@ -46,54 +43,34 @@ export function buildHandoverData(device) {
     transfer_date: isoToday(),
     computer_name: device.ten || '',
     service_tag: device.ma || '',
-    // Loại của máy chính — dùng để liệt kê lại máy chính trong bảng đính kèm (xem attachmentRows bên dưới).
     main_loai: device.loai || '',
     storage: device.storage || '',
     ram: device.ram || '',
     cpu: device.cpu || '',
     adapter: isPhone ? 'SAMSUNG Fast Charge Adapter' : 'Adapter Dell 65W',
-    // Số điện thoại của SIM trong máy (lấy từ GLPI hoặc nhập tay); chưa có thì ghi N/A.
     phone_number: (isPhone && device.phone_number) || 'N/A',
-    // Lấy theo GLPI khi đã đồng bộ; chưa có thì dùng mặc định của công ty. Điện thoại không có Windows/Office/chuột
-    // bàn phím nên mặc định "N/A" (khớp phiếu giấy) thay vì mặc định của máy tính — vẫn sửa tay được nếu cần.
     windows: isPhone ? 'N/A' : device.os_name || 'Win 11 Professional',
     office: isPhone ? 'N/A' : device.office_name || 'Office 365',
     peripherals: isPhone ? 'N/A' : 'Wire Mouse and Keyboard',
-    // Màn hình rời đi kèm máy bàn — điền qua nút "Thêm màn hình theo Serial" (MonitorPicker), có dòng riêng trên
-    // phiếu (khớp mẫu phiếu giấy chính thức ITFGE-00459_19_A: Mouse/Keyboard, Monitor, Others là 3 dòng tách biệt
-    // trong "OTHER DEVICE", không gộp chung vào "Others" như trước). "monitor" là chuỗi hiện trong ô (sửa tay được);
-    // "monitors" là danh sách gốc (mỗi lần bấm "+ Serial màn hình" thêm 1 phần tử) — dùng để biết chính xác đã thêm
-    // bao nhiêu màn hình và để liệt kê chúng vào trang "ATTACHED EQUIPMENT LIST" (xem printedRows bên dưới).
     monitor: '',
     monitors: [],
     model: device.model || '',
     other: 'N/A',
-    // Danh sách thiết bị đính kèm khi 1 người nhận nhiều thiết bị cùng lúc — in thành 1 trang riêng ngay sau
-    // phiếu chính (không đụng tới ô Other devices trên phiếu).
     attachments: [],
   };
 }
 
-// Phiếu cấp nhiều máy (gộp từ trang Thiết bị): danh sách đính kèm liệt kê luôn máy chính ở dòng đầu, không chỉ các máy
-// còn lại — để người nhận nhìn 1 bảng là biết đủ hết các máy, không cần tìm riêng máy chính ở phiếu trước. CHỈ tính
-// các máy gộp (data.attachments) — không tính màn hình (xem printedRows), vì "N ea" ở đây dùng để quyết định các ô
-// DEVICE NAME/SERIAL NUMBER/MODEL/PSU/LICENSE có hiện "refer to attached file" hay không, màn hình không liên quan.
 function attachmentRows(data) {
   const extra = data.attachments || [];
   if (extra.length === 0) return extra;
   return [{ id: 'main', ten: data.computer_name, ma: data.service_tag, loai: data.main_loai || (data.kind === 'phone' ? 'phone' : 'laptop'), model: data.model }, ...extra];
 }
 
-// Ô Computer Name / Service Tag của phiếu chính: có từ 2 thiết bị trở lên (gộp từ trang Thiết bị) thì ghi
-// "Please refer to the attached file (N ea)" thay vì chỉ tên/serial của riêng máy chính — áp dụng cho cả phiếu máy tính lẫn
-// điện thoại, không chỉ riêng điện thoại; singleValue là giá trị hiện khi chỉ có đúng 1 thiết bị (mặc định service_tag).
 function serviceTagDisplay(data, singleValue = data.service_tag) {
   const rows = attachmentRows(data);
   return rows.length > 1 ? `Please refer to the attached file (${rows.length} ea)` : singleValue;
 }
 
-// Ô Monitor: data.monitors là nguồn đúng (mỗi lần "+ Serial màn hình" thêm 1 phần tử); phiếu cũ đã lưu trước khi có
-// mảng này chỉ còn chuỗi data.monitor — đếm tạm theo dấu hiệu " (S/N: " trong chuỗi đó để không hiện sai cho phiếu cũ.
 function monitorDisplay(data) {
   if (data.monitors?.length > 0) return data.monitors.length > 1 ? `Please refer to the attached file (${data.monitors.length} ea)` : data.monitors[0].label;
   const raw = (data.monitor || '').trim();
@@ -102,9 +79,6 @@ function monitorDisplay(data) {
   return count > 1 ? `Please refer to the attached file (${count} ea)` : raw;
 }
 
-// Bảng in ra trang "ATTACHED EQUIPMENT LIST": máy chính + máy gộp thêm (attachmentRows) VÀ màn hình đã chọn qua
-// "+ Serial màn hình" (data.monitors) — 2 nguồn khác nhau (gộp nhiều máy / màn hình rời đi kèm máy chính) nhưng gộp
-// chung vào 1 bảng để người nhận thấy đủ hết, không phải đối chiếu ngược lại ô "Monitor" xem là máy nào.
 function printedRows(data) {
   const devices = attachmentRows(data);
   const monitors = (data.monitors || []).map((m) => ({ id: `monitor-${m.id}`, ten: m.ten, ma: m.ma, loai: 'monitor', model: m.model }));
@@ -114,8 +88,6 @@ function printedRows(data) {
     : [{ id: 'main', ten: data.computer_name, ma: data.service_tag, loai: data.main_loai || (data.kind === 'phone' ? 'phone' : 'laptop'), model: data.model }];
   return [...base, ...monitors];
 }
-// Có gì để in trang "ATTACHED EQUIPMENT LIST" không — dùng chung ở cả bản xem trước, lúc in thật, lẫn trang Phiếu bàn
-// giao (in lại hàng loạt), tránh lặp lại điều kiện ở nhiều nơi rồi quên sửa đồng bộ khi đổi logic.
 export function hasPrintedAttachments(data) {
   return (data.attachments?.length || 0) > 0 || (data.monitors?.length || 0) > 0;
 }
@@ -176,9 +148,6 @@ export function HandoverSheet({ data }) {
           <tr><th>HDD/SSD</th><td colSpan="2" className="hv-center">{data.storage || 'N/A'}</td></tr>
           <tr><th>RAM</th><td colSpan="2" className="hv-center">{data.ram || 'N/A'}</td></tr>
           <tr><th>CPU</th><td colSpan="2" className="hv-center">{data.cpu || 'N/A'}</td></tr>
-          {/* PSU/ADAPTER và LICENSE KHÔNG dùng serviceTagDisplay — khác với DEVICE NAME/SERIAL NUMBER/MODEL (chắc chắn
-              khác nhau giữa các máy gộp, không có 1 giá trị đúng để ghi), adapter/bản quyền hoàn toàn có thể giống
-              nhau giữa các máy, nên vẫn hiện và sửa tay được bình thường dù gộp bao nhiêu máy. */}
           <tr><th>PSU/ADAPTER</th><td colSpan="2" className="hv-center">{data.adapter}</td></tr>
           <tr>
             <th rowSpan="2">LICENSE</th>
@@ -186,8 +155,6 @@ export function HandoverSheet({ data }) {
           </tr>
           <tr><td className="hv-center hv-sub">Office</td><td className="hv-center">{data.office}</td></tr>
           <tr>
-            {/* Phiếu điện thoại dùng chung khung này nhưng có thêm dòng Mobile Phone Number (máy tính không có) —
-                rowSpan phải cộng thêm 1 cho đúng số dòng thật sự render bên dưới. */}
             <th rowSpan={isPhone ? 4 : 3}>OTHER DEVICE</th>
             <td className="hv-center hv-sub">Mouse/Keyboard</td><td className="hv-center">{data.peripherals}</td>
           </tr>
@@ -255,15 +222,8 @@ export function HandoverSheet({ data }) {
   );
 }
 
-// 1 trang A4 (284mm cao, lề 8mm, đầu trang ~45mm) chứa được khoảng chừng này dòng bảng (dòng ~7.5mm/dòng tính theo
-// cỡ chữ 9pt + đệm trong .hv-attach-table) — chừa dư an toàn, không tính sát để lỡ font trình duyệt khác nhau
-// chút cũng không bị tràn dòng cuối ra ngoài trang.
 const ATTACH_ROWS_PER_PAGE = 34;
 
-// Trang kèm theo phiếu chính khi 1 người nhận nhiều thiết bị — cùng khổ A4, cùng phong cách (logo, tiêu đề song
-// ngữ, bảng viền đen) để in nối liền sau phiếu chính. Nhiều thiết bị (vd 25-50+) thì tự chia thành NHIỀU trang rõ
-// ràng (mỗi trang lặp lại đầu đề + tiêu đề cột) thay vì 1 bảng dài lê thê — vừa đúng với số dòng thật sự in vừa 1
-// trang giấy, vừa để bản xem trước ngay trong khung soạn phiếu trông gọn gàng như tài liệu nhiều trang thật.
 export function AttachmentSheet({ data }) {
   const attachments = printedRows(data);
   const pageCount = Math.max(1, Math.ceil(attachments.length / ATTACH_ROWS_PER_PAGE));
@@ -314,8 +274,6 @@ export function AttachmentSheet({ data }) {
 
 const WINDOWS_OPTIONS = ['Win 11 Professional', 'Win 10 Professional', 'N/A'];
 const OFFICE_OPTIONS = ['Office 365', 'Office 2016', 'Office 2019', 'Office 2024', 'N/A'];
-// Gộp cả sạc điện thoại vào đây — máy chính giờ chọn theo thứ tự bấm (không còn luôn ưu tiên điện thoại lên trước),
-// nên 1 phiếu máy tính vẫn có thể cần chọn loại sạc của điện thoại nếu máy chính đổi thành điện thoại giữa chừng.
 const ADAPTER_OPTIONS = ['Adapter Dell 65W', 'Adapter Dell 45W', 'PSU C13', 'SAMSUNG Fast Charge Adapter', 'N/A'];
 const PHONE_ADAPTER_OPTIONS = ['SAMSUNG Fast Charge Adapter', 'N/A'];
 const PERIPHERALS_OPTIONS = ['Wire Mouse and Keyboard', 'Wireless Dell', 'N/A'];
@@ -372,29 +330,19 @@ const PHONE_FIELD_GROUPS = [
       ['model', 'Model'],
       ['service_tag', 'IME/SN'],
       ['phone_number', 'Mobile phone number'],
-      // Phiếu in ra có sẵn dòng HDD/SSD, RAM, CPU (khung dùng chung với máy tính, tự ghi N/A nếu trống) — thêm ô ở
-      // đây để sửa tay được (đa số điện thoại để trống/N/A, nhưng tablet/điện thoại đời mới vẫn có thể cần ghi).
       ['cpu', 'CPU'],
       ['ram', 'RAM'],
       ['storage', 'HDD/SSD'],
       ['adapter', 'Adapter', 'select', PHONE_ADAPTER_OPTIONS],
-      // Phiếu điện thoại dùng chung khung in với máy tính nên vẫn có dòng License Windows/Office/Mouse-Keyboard —
-      // mặc định "N/A" (không áp dụng cho điện thoại) nhưng vẫn cần ô ở đây để sửa tay được (vd máy có kèm chuột/bàn
-      // phím thật thì đổi lại), không thì không có cách nào sửa trường hiện trên phiếu in.
       ['windows', 'License - Windows', 'select', WINDOWS_OPTIONS],
       ['office', 'License - Office', 'select', OFFICE_OPTIONS],
       ['peripherals', 'Mouse/Keyboard', 'select', PERIPHERALS_OPTIONS],
-      // Có sẵn ô Monitor riêng giống phiếu máy tính — để điện thoại/tablet đi kèm màn hình (vd tablet gắn đế có màn
-      // hình rời) dùng đúng "+ Serial màn hình", không bị đẩy nhầm vào "+ Thêm thiết bị" (chỗ đó dành cho gộp NHIỀU
-      // MÁY CHÍNH khác, thêm nhầm vào đó làm phiếu hiểu lầm có 2 thiết bị chính, in sai "refer to attached file").
       ['monitor', 'Monitor'],
       ['other', 'Other devices'],
     ],
   },
 ];
 
-// Các ô thuộc về thiết bị (không phải về người nhận): dùng chung giữa các phiếu cùng model nên được tái dùng/clone.
-// Họ tên, mã NV, bộ phận, serial, tên máy, IP là riêng của từng người/máy nên không nằm trong danh sách này.
 const SPEC_FIELDS = ['cpu', 'ram', 'storage', 'adapter', 'windows', 'office', 'peripherals', 'monitor', 'other'];
 const draftKey = (deviceId) => `warehub-handover-draft-${deviceId}`;
 
@@ -407,7 +355,6 @@ function readDraft(deviceId) {
   }
 }
 
-// Tiền tố năm+tháng của ngày lập, khớp đầu số phiếu (2609001 -> "2609").
 const monthPrefix = (isoDate) => (/^\d{4}-\d{2}/.test(isoDate || '') ? `${isoDate.slice(2, 4)}${isoDate.slice(5, 7)}` : '');
 
 export function mergeSpecs(current, source, { overwrite }) {
@@ -420,8 +367,6 @@ export function mergeSpecs(current, source, { overwrite }) {
   return next;
 }
 
-// Hộp thoại chọn dùng chung: gõ để tìm (chờ 250ms sau lần gõ cuối), danh sách kết quả, báo lỗi/rỗng.
-// load(search) trả về Promise<mảng>; bỏ qua kết quả của lần tìm đã bị thay thế.
 function usePickerSearch(initialSearch, load) {
   const [search, setSearch] = useState(initialSearch);
   const [rows, setRows] = useState(null);
@@ -478,8 +423,6 @@ function PickerRow({ no, title, subtitle, who, onClick }) {
   );
 }
 
-// excludeId (không phải excludeNo): "no" chỉ duy nhất trong CÙNG 1 nhóm máy tính/điện thoại-tablet (xem backend
-// HandoverKind) — 1 phiếu nhóm khác có thể mang đúng số đó mà vẫn là phiếu hợp lệ để chọn, không được lọc nhầm ra.
 function HandoverPicker({ initialSearch, excludeId, onPick, onCancel }) {
   const { t } = useT();
   const picker = usePickerSearch(initialSearch || '', (search) => (
@@ -507,17 +450,11 @@ function HandoverPicker({ initialSearch, excludeId, onPick, onCancel }) {
   );
 }
 
-// Máy bàn thường kèm màn hình rời — màn hình đã là 1 loại thiết bị có sẵn trong hệ thống (loai: monitor),
-// nên tìm theo Serial của chính nó thay vì phải gõ tay model/hãng.
-// excludeIds: màn hình đã chọn rồi thì không hiện lại nữa (picker này cố ý không tự đóng sau mỗi lần chọn, để chọn
-// liên tiếp nhiều màn hình — nếu không lọc, bấm trúng lại đúng màn hình vừa chọn sẽ bị thêm trùng vào danh sách).
 function MonitorPicker({ excludeIds, onPick, onCancel }) {
   const { t } = useT();
   const picker = usePickerSearch('', (search) => (
     api.get('/devices', { search, loai: 'monitor', page: 1, pageSize: 20 }).then((result) => result.devices)
   ));
-  // Lọc ngay ở đây (không phải trong usePickerSearch) để cập nhật tức thì mỗi lần chọn thêm 1 màn hình, không cần
-  // gõ lại ô tìm kiếm mới thấy danh sách refresh (usePickerSearch chỉ tải lại khi "search" đổi).
   const filteredPicker = { ...picker, rows: picker.rows ? picker.rows.filter((item) => !excludeIds.has(item.id)) : picker.rows };
   return (
     <PickerDialog
@@ -541,16 +478,11 @@ function MonitorPicker({ excludeIds, onPick, onCancel }) {
   );
 }
 
-// Khi 1 người nhận nhiều thiết bị cùng lúc — tìm & thêm bất kỳ loại thiết bị nào (không chỉ màn hình)
-// vào danh sách đính kèm (in thành trang riêng sau phiếu), tách biệt với ô Other devices trên phiếu.
 function AttachmentPicker({ excludeIds, onPick, onCancel }) {
   const { t } = useT();
   const picker = usePickerSearch('', (search) => (
     api.get('/devices', { search, page: 1, pageSize: 20 }).then((result) => result.devices)
   ));
-  // Lọc lại ở đây (không chỉ trong load ở trên) để cập nhật tức thì mỗi lần thêm 1 thiết bị — hộp thoại này cố ý
-  // không tự đóng sau mỗi lần chọn (để thêm liên tiếp nhiều thiết bị), usePickerSearch chỉ tải lại khi gõ ô tìm
-  // kiếm mới (search đổi), không tự biết excludeIds vừa đổi.
   const filteredPicker = { ...picker, rows: picker.rows ? picker.rows.filter((item) => !excludeIds.has(item.id)) : picker.rows };
   return (
     <PickerDialog
@@ -574,8 +506,6 @@ function AttachmentPicker({ excludeIds, onPick, onCancel }) {
   );
 }
 
-// Tạo phiếu mới thẳng từ trang Phiếu bàn giao (không cần qua trang Thiết bị trước) — chọn 1 thiết bị bất kỳ để làm
-// thiết bị chính, HandoverModal mở ra với device này giống hệt như bấm "Phiếu BG" từ trang Thiết bị.
 export function NewHandoverPicker({ onPick, onCancel }) {
   const { t } = useT();
   const picker = usePickerSearch('', (search) => (
@@ -603,9 +533,6 @@ export function NewHandoverPicker({ onPick, onCancel }) {
   );
 }
 
-// extraAttachments: chọn nhiều thiết bị cùng lúc ở trang Thiết bị rồi gộp vào 1 phiếu (1 người nhận nhiều máy) —
-// thiết bị đầu tiên làm máy chính, các thiết bị còn lại đẩy thẳng vào danh sách đính kèm ngay khi mở phiếu, không
-// cần mở lại phiếu đã lưu rồi bấm "Thêm thiết bị" từng cái một như trước.
 export function HandoverModal({ device, saved, extraAttachments, onClose }) {
   const { t } = useT();
   const deviceId = saved ? saved.device_id : device?.id;
@@ -615,9 +542,6 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
     if (saved) return { draft: null, data: { ...buildHandoverData(device || {}), ...(saved.data || {}), no: saved.no } };
     const draft = draftEnabled ? readDraft(deviceId) : null;
     const base = { ...buildHandoverData(device), ...(draft || {}) };
-    // Thay hẳn (không gộp) danh sách đính kèm của bản nháp cũ — bản nháp cũ của ĐÚNG thiết bị chính này có thể còn
-    // sót thiết bị đính kèm từ 1 lần gộp TRƯỚC đó (đã đóng không lưu) không liên quan gì tới lần gộp mới đang làm;
-    // người dùng vừa tự chọn đúng danh sách này, không nên âm thầm lẫn thêm thiết bị cũ nào khác vào.
     if (extraAttachments?.length) base.attachments = extraAttachments;
     return { draft, data: base };
   });
@@ -626,26 +550,20 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [issued, setIssued] = useState(Boolean(saved));
-  // true khi người dùng tự gõ số phiếu (thay vì để hệ thống tự cấp) — dùng để tắt việc tự động lấy/ghi đè số dự kiến.
   const [manualNo, setManualNo] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [monitorPickerOpen, setMonitorPickerOpen] = useState(false);
   const [attachmentPickerOpen, setAttachmentPickerOpen] = useState(false);
-  // Phiếu chính thức đã lưu: lưu/in lại thì sửa tiếp trên ĐÚNG bản ghi đó (theo id), không tốn thêm số. "no" một mình
-  // không còn là khoá duy nhất từ khi tách dãy số máy tính/điện thoại-tablet (2 nhóm có thể cùng ra 1 chuỗi "no").
   const allocatedRef = useRef(saved ? { id: saved.id, no: saved.no } : null);
   const savedRef = useRef(false);
 
-  // Đã lưu phiếu lên server thì bỏ bản nháp cục bộ, lần sau lấy từ phiếu đã lưu (không bị dính dữ liệu cũ).
   function handleClose() {
     if (savedRef.current && draftEnabled) {
-      try { localStorage.removeItem(draftKey(deviceId)); } catch { /* bỏ qua */ }
+      try { localStorage.removeItem(draftKey(deviceId)); } catch {}
     }
     onClose();
   }
 
-  // Thiếu mảng dependency thì effect này chạy lại (gỡ + gắn listener) sau MỖI lần render, kể cả mỗi lần gõ phím vào form —
-  // dùng ref giữ giá trị mới nhất để chỉ cần đăng ký 1 lần lúc mở phiếu (mount), không lặp lại mỗi lần data đổi.
   const pickerOpenRef = useRef(pickerOpen);
   pickerOpenRef.current = pickerOpen;
   const handleCloseRef = useRef(handleClose);
@@ -656,14 +574,12 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Giữ lại phần đang gõ dở (kể cả khi lỡ đóng hộp thoại hoặc tải lại trang).
   useEffect(() => {
     if (!draftEnabled) return;
     const { no, register_date, transfer_date, ...draft } = data;
-    try { localStorage.setItem(draftKey(deviceId), JSON.stringify(draft)); } catch { /* bỏ qua */ }
+    try { localStorage.setItem(draftKey(deviceId), JSON.stringify(draft)); } catch {}
   }, [data, deviceId, draftEnabled]);
 
-  // Thiết bị chưa có bản nháp: lấy thông số từ phiếu gần nhất của chính nó, hoặc của thiết bị cùng model.
   useEffect(() => {
     if (saved || initial.draft || deviceId == null) return undefined;
     let cancelled = false;
@@ -678,7 +594,7 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
   }, [saved, initial.draft, deviceId, device?.model]);
 
   useEffect(() => {
-    if (manualNo) return undefined; // đang tự gõ số — không để hệ thống tự cấp đè lên nữa
+    if (manualNo) return undefined;
     const allocated = allocatedRef.current;
     if (allocated && allocated.no.startsWith(monthPrefix(data.register_date))) {
       setIssued(true);
@@ -693,7 +609,6 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
     return () => { cancelled = true; };
   }, [data.register_date, manualNo]);
 
-  // Gõ tay vào ô "Số phiếu": tắt tự cấp. Xoá trống ô lại thì quay về tự cấp như cũ.
   function updateNoField(value) {
     setManualNo(value.trim().length > 0);
     updateField('no', value);
@@ -701,12 +616,9 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
 
   async function persist() {
     const { no: shownNo, ...payload } = data;
-    // Đã lưu 1 lần rồi (dù tự cấp hay tự gõ) thì sửa tiếp trên ĐÚNG phiếu đó (PUT theo id) — số tự gõ không nhất
-    // thiết theo định dạng YYMMxxx nên không áp điều kiện "cùng tháng" như số tự cấp.
     let existing = allocatedRef.current && (manualNo || allocatedRef.current.no.startsWith(monthPrefix(data.register_date))) ? allocatedRef.current : null;
     let no, id;
     if (existing) {
-      // In lại phiếu cũ mà đổi số (gõ tay khác với số đang lưu) -> gửi kèm "no" mới để đổi luôn số của phiếu đó.
       const result = await api.put(`/handovers/${existing.id}`, { full_name: data.full_name, data: payload, no: manualNo && shownNo && shownNo !== existing.no ? shownNo : null });
       no = result.no; id = result.id;
     } else {
@@ -748,7 +660,6 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
     }
   }
 
-  // Đọc giá trị trước khi vào updater (React có thể chạy updater sau khi event bị tái sử dụng).
   function updateField(key, value) {
     setData((current) => ({ ...current, [key]: value }));
   }
@@ -761,10 +672,6 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
 
   function handleMonitorPick(monitor) {
     const label = `${monitor.model || monitor.ten} (S/N: ${monitor.ma})`;
-    // "monitors" (mảng) là nguồn đúng — vừa liệt kê vào trang "ATTACHED EQUIPMENT LIST" (xem printedRows), vừa tự
-    // suy ra chuỗi "monitor" hiển thị/in gọn, không giữ 2 nguồn lệch nhau. KHÔNG tự đóng hộp chọn sau khi chọn 1 cái
-    // — để chọn liên tiếp nhiều màn hình cùng lúc, tự bấm "×" trên hộp thoại khi chọn xong (giống AttachmentPicker
-    // nhưng picker này cố ý ở lại mở vì người dùng hay chọn nhiều màn hình cùng lúc hơn).
     setData((current) => {
       const monitors = [...(current.monitors || []), { id: monitor.id, ten: monitor.ten, ma: monitor.ma, model: monitor.model, label }];
       return { ...current, monitors, monitor: monitors.map((m) => m.label).join(', ') };
@@ -779,7 +686,6 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
     });
   }
 
-  // Điền nhanh "Case for <model> (N ea)" cho phiếu điện thoại; N gồm cả máy chính khi có đính kèm. Vẫn sửa tay được.
   function handleCaseFill() {
     const count = attachmentRows(data).length || 1;
     const text = `Case for ${data.model || '...'}${count > 1 ? ` (${count}ea)` : ''}`;
@@ -790,7 +696,6 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
   function handleAttachmentPick(item) {
     setData((current) => ({ ...current, attachments: [...(current.attachments || []), item] }));
     setNotice(t('hv.attachAdded', { code: item.ma }));
-    // KHÔNG tự đóng — để thêm liên tiếp nhiều thiết bị cùng lúc, tự bấm "×" trên hộp thoại khi chọn xong (giống Monitor).
   }
 
   function removeAttachment(id) {

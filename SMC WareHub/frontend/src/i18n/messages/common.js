@@ -1,4 +1,3 @@
-// Chữ dùng chung: khung ứng dụng, đăng nhập, phân trang, người dùng, lịch sử sửa, loại thiết bị.
 export const common = {
   'lang.label': ['Ngôn ngữ', 'Language'],
   'lang.vi': ['Tiếng Việt', 'Vietnamese'],
@@ -176,7 +175,6 @@ export const common = {
   'error.http': ['Lỗi {status}', 'Error {status}'],
 };
 
-// Các câu lỗi mà backend trả về (tiếng Việt) và bản tiếng Anh tương ứng.
 const LIMIT_LABELS = {
   'Mã thiết bị': 'Device code',
   'Tên thiết bị': 'Device name',

@@ -14,7 +14,6 @@ import { useReconnect } from '../context/ConnectionContext';
 
 const emptyForm = { id: null, source_id: null, original_ma: '', ma: '', ten: '', loai: 'laptop', model: '', producer: '', ip_address: '', cpu: '', ram: '', storage: '', os_name: '', office_name: '', phone_number: '', sim_serial: '', user_name: '', registered_at: '', phong_ban: '', ghi_chu: '' };
 
-// Cột của bảng thiết bị — bấm chuột phải vào tiêu đề bảng để tick ẩn/hiện từng cột.
 const COLUMN_DEFS = [
   { key: 'ma', labelKey: 'field.ma', className: 'mono', cell: (d) => d.ma },
   { key: 'model', labelKey: 'field.model', cell: (d) => d.model || '—' },
@@ -35,7 +34,6 @@ const COLUMN_DEFS = [
   { key: 'registered_at', labelKey: 'field.date', cell: (d) => (d.registered_at ? d.registered_at.slice(0, 10) : '—') },
   { key: 'updated_at', labelKey: 'field.updated_at', cell: (d) => (d.updated_at ? new Date(d.updated_at).toLocaleString('vi-VN') : '—') },
 ];
-// Chữ trên nút khi đang đồng bộ: giai đoạn hiện tại và số máy đã xong.
 function syncProgressLabel(progress, t) {
   if (!progress?.phase) return t('dev.syncing');
   const phase = t(`dev.syncPhase.${progress.phase}`);
@@ -53,10 +51,6 @@ function loadColumnVisibility() {
   }
 }
 
-// Khớp giới hạn deviceIds tối đa của endpoint POST /print ở backend — chặn sớm ở đây
-// để tránh render hàng trăm/nghìn tem cùng lúc làm treo trình duyệt trước khi kịp báo lỗi. Dùng chung luôn cho cả
-// gộp nhiều thiết bị vào 1 phiếu (không giới hạn riêng thấp hơn nữa) — muốn gộp bao nhiêu cũng được, miễn trong mức
-// an toàn kỹ thuật này.
 const MAX_PRINT_BATCH = 500;
 const LOAI_KEYS = Object.keys(LOAI_LABELS);
 
@@ -66,7 +60,6 @@ const toggleInSet = (set, id) => {
   return next;
 };
 
-// Các trường của form thiết bị lấy từ 1 thiết bị (dùng chung cho Sửa và Clone).
 const deviceToFormFields = (device) => ({
   ma: device.ma,
   ten: device.ten || '',
@@ -99,17 +92,11 @@ export function Devices() {
   const [pageSize, setPageSize] = useState(50);
   const [search, setSearch] = useState('');
   const [loaiFilter, setLoaiFilter] = useState('');
-  // '' = tất cả, 'true' = đã in tem (ít nhất 1 lần), 'false' = chưa in tem — dùng để tìm lại đúng lô vừa in tem trước đó
-  // mà làm phiếu bàn giao, không phải nhớ tay từng mã. 2 ô ngày chỉ có tác dụng khi đang lọc "đã in tem" (thu hẹp lại
-  // vd chỉ trong hôm nay) — để trống là lấy mọi thời điểm.
   const [printedFilter, setPrintedFilter] = useState('');
   const [printedFrom, setPrintedFrom] = useState('');
   const [printedTo, setPrintedTo] = useState('');
   const [sort, setSort] = useState({ by: null, dir: 'asc' });
   const [selected, setSelected] = useState(new Set());
-  // Dữ liệu đầy đủ của từng thiết bị đã chọn (id -> device), lưu riêng ngoài `devices` (trang/kết quả tìm kiếm
-  // hiện tại) để khi gõ tìm kiếm/đổi trang làm `devices` đổi khác đi, danh sách đã chọn để in vẫn còn đủ nội dung
-  // thay vì biến mất do lọc theo `devices` hiện tại không còn chứa các thiết bị đã chọn trước đó nữa.
   const [selectedDevices, setSelectedDevices] = useState(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -125,11 +112,7 @@ export function Devices() {
   const [queuePrinting, setQueuePrinting] = useState(false);
   const [instantPrintDevice, setInstantPrintDevice] = useState(null);
   const [handoverDevice, setHandoverDevice] = useState(null);
-  // Chọn nhiều thiết bị rồi gộp vào 1 phiếu (1 người nhận nhiều máy) — thiết bị đầu tiên làm máy chính, phần còn
-  // lại đẩy thẳng vào danh sách đính kèm của phiếu (xem HandoverModal extraAttachments).
   const [handoverAttachments, setHandoverAttachments] = useState(null);
-  // Hộp xác nhận trước khi tạo phiếu riêng/gộp phiếu — thay cho confirm() mặc định của trình duyệt (không style được,
-  // không xuống dòng đẹp cho danh sách dài). { type: 'bulk' | 'merge', devices: [...] } hoặc null khi đang đóng.
   const [confirmBulkAction, setConfirmBulkAction] = useState(null);
   const [bulkHandoverBusy, setBulkHandoverBusy] = useState(false);
   const [bulkHandoverItems, setBulkHandoverItems] = useState(null);
@@ -141,10 +124,9 @@ export function Devices() {
   const [exporting, setExporting] = useState(false);
   const [syncingGlpi, setSyncingGlpi] = useState(false);
   const syncFollowing = useRef(false);
-  const [syncProgress, setSyncProgress] = useState(null); // { phase, done, total } từ máy chủ
+  const [syncProgress, setSyncProgress] = useState(null);
   const requestVersion = useRef(0);
 
-  // Bộ lọc chung cho danh sách/xuất kho — tách riêng để không lặp lại 3 chỗ (trang hiện tại + 2 bước kéo toàn bộ trang khi xuất CSV).
   function deviceFilterParams() {
     return {
       search, loai: loaiFilter, printed: printedFilter || undefined,
@@ -172,14 +154,14 @@ export function Devices() {
   }, [search, loaiFilter, printedFilter, printedFrom, printedTo, page, pageSize, sort]);
 
   useEffect(() => {
-    const timer = setTimeout(fetchDevices, 250); // debounce khi gõ tìm kiếm
+    const timer = setTimeout(fetchDevices, 250);
     return () => clearTimeout(timer);
   }, [fetchDevices]);
 
   useReconnect(fetchDevices);
 
   useEffect(() => {
-    try { localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(columnVisibility)); } catch { /* bỏ qua */ }
+    try { localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(columnVisibility)); } catch {}
   }, [columnVisibility]);
 
   useEffect(() => {
@@ -282,7 +264,6 @@ export function Devices() {
 
   function commitReview(incoming) {
     setError('');
-    // Báo đúng số thiết bị thực sự được thêm: thiết bị đã có trong hàng đợi không thêm lần nữa.
     const inQueue = new Set(queue.map((d) => d.id));
     const added = incoming.filter((d) => !inQueue.has(d.id)).length;
     const already = incoming.length - added;
@@ -305,7 +286,6 @@ export function Devices() {
   function reviewPrintList() {
     const incoming = Array.from(printListSelection).map((id) => selectedDevices.get(id)).filter(Boolean);
 
-    // Mã QR chứa Serial Number (Mã thiết bị): thiết bị không có serial thì không tạo được QR, phải báo cho người dùng biết.
     const noSerial = incoming.filter((device) => !device.ma?.trim());
     if (noSerial.length > 0) {
       setError(t('dev.noSerial', { count: noSerial.length, names: noSerial.slice(0, 5).map((d) => d.ten || `#${d.id}`).join(', ') }));
@@ -364,10 +344,6 @@ export function Devices() {
     setExporting(true);
     setError('');
     try {
-      // Kéo toàn bộ thiết bị khớp bộ lọc hiện tại qua từng trang (không chỉ trang đang xem),
-      // để export đúng nghĩa "toàn bộ kho" kể cả khi có hàng nghìn thiết bị. Lấy trang đầu để biết
-      // tổng số trang, rồi tải các trang còn lại song song (giới hạn số lượt cùng lúc) thay vì
-      // tuần tự từng trang một — nhanh hơn nhiều lần khi dữ liệu lớn.
       const CONCURRENCY = 6;
       const first = await api.get('/devices', { ...deviceFilterParams(), page: 1, pageSize: 100 });
       const pages = [first.devices];
@@ -394,7 +370,6 @@ export function Devices() {
     }
   }
 
-  // Kết quả đồng bộ (thông báo cuối cùng cho người dùng).
   function showSyncResult(result) {
     const lines = [
       t('dev.syncDone', { created: result.created, updated: result.updated, unchanged: result.unchanged }),
@@ -411,14 +386,12 @@ export function Devices() {
     lines.push(t('dev.syncDetailed', { count: result.detailed ?? 0 }));
     (result.detail_warnings || []).forEach((w) => lines.push(`⚠ ${translateServerMessage(w)}`));
     alert(lines.join('\n'));
-    // Đưa thiết bị vừa đồng bộ (mới thêm/mới sửa) lên đầu danh sách để in cho tiện, thay vì phải tự tìm/sắp lại.
     setSort({ by: 'updated_at', dir: 'desc' });
     setPage(1);
   }
 
-  // Đồng bộ chạy nền trên máy chủ: hỏi tiến độ định kỳ tới khi xong (bấm đồng bộ xong tải lại trang vẫn theo dõi tiếp được).
   async function followGlpiSync() {
-    if (syncFollowing.current) return; // chỉ 1 vòng theo dõi tại 1 thời điểm (tránh hiện kết quả 2 lần)
+    if (syncFollowing.current) return;
     syncFollowing.current = true;
     setSyncingGlpi(true);
     setError('');
@@ -457,13 +430,9 @@ export function Devices() {
   useEffect(() => {
     if (!isAdmin) return;
     api.get('/devices/glpi-sync/status').then((status) => { if (status.running) followGlpiSync(); }).catch(() => {});
-    // chỉ chạy 1 lần khi mở trang: nếu máy chủ đang đồng bộ dở thì theo dõi tiếp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Gộp các thiết bị đang chọn vào 1 phiếu duy nhất (1 người nhận nhiều máy) — mở phiếu như bấm "Phiếu BG" bình
-  // thường (vẫn xem lại/sửa/điền tên người nhận trước khi in), chỉ khác là đã có sẵn các thiết bị còn lại trong
-  // danh sách đính kèm, không phải tự bấm "Thêm thiết bị" từng cái sau khi mở phiếu.
   function mergeSelectedIntoOneHandover() {
     const chosen = Array.from(selectedDevices.values());
     if (chosen.length === 0) return;
@@ -471,17 +440,10 @@ export function Devices() {
       setError(t('dev.mergeTooMany', { max: MAX_PRINT_BATCH, count: chosen.length }));
       return;
     }
-    // Hiện đúng danh sách mã thiết bị trước khi gộp (hộp thoại riêng, không phải confirm() mặc định của trình duyệt)
-    // — "selectedDevices" cố ý giữ nguyên qua các lần tìm kiếm khác nhau (để dùng cho hàng đợi in), nên 1 thiết bị
-    // chọn từ trước đó rồi quên bỏ chọn có thể vẫn còn lẫn trong này; thấy rõ danh sách thì bắt lỗi đó ngay.
     setConfirmBulkAction({ type: 'merge', devices: chosen });
   }
 
   function doMergeSelectedIntoOneHandover(chosen) {
-    // Máy chính là thiết bị được chọn ĐẦU TIÊN (đúng thứ tự bấm) — phiếu điện thoại/tablet và máy tính giờ dùng
-    // chung 1 khung in giống hệt nhau nên không còn cần ưu tiên loại nào lên trước; số phiếu vẫn tự tính đúng theo
-    // loại của máy chính (xem backend HandoverKind), chỉ khác ở chỗ máy chính giờ là máy chọn trước, không phải
-    // luôn ưu tiên điện thoại/tablet như trước.
     const main = chosen[0];
     const rest = chosen.filter((d) => d.id !== main.id);
     setSelected(new Set());
@@ -504,9 +466,6 @@ export function Devices() {
     setError('');
     setBulkHandoverBusy(true);
     try {
-      // Lấy thông số cũ (nếu có) cho tất cả thiết bị — bước này độc lập giữa các thiết bị, không cần giữ thứ tự,
-      // nhưng vẫn giới hạn số lượt cùng lúc (giống exportInventory) — chọn hàng trăm thiết bị một lúc mà bắn hết
-      // ngần ấy yêu cầu cùng lúc dễ vượt giới hạn kết nối của trình duyệt và dồn tải lên server không cần thiết.
       const CONCURRENCY = 6;
       const latestResults = new Array(chosen.length);
       for (let i = 0; i < chosen.length; i += CONCURRENCY) {
@@ -517,7 +476,6 @@ export function Devices() {
       }
 
       const created = [];
-      // Tạo tuần tự từng phiếu (không song song) để số phiếu YYMMxxx cấp ra đúng thứ tự liền mạch, không bị chen ngang.
       try {
         for (let i = 0; i < chosen.length; i++) {
           const device = chosen[i];
@@ -529,8 +487,6 @@ export function Devices() {
           created.push({ ...payload, no: result.no, id: result.id });
         }
       } catch (err) {
-        // Lỗi giữa chừng: các phiếu TRƯỚC đó đã lưu thật trên server rồi (không huỷ được) — báo rõ đã tạo được bao
-        // nhiêu phiếu để người dùng không bấm tạo lại từ đầu (sẽ ra thêm phiếu trùng cho các thiết bị đã có rồi).
         if (created.length > 0) {
           throw new Error(t('dev.bulkPartialError', { done: created.length, total: chosen.length, error: err.message }));
         }

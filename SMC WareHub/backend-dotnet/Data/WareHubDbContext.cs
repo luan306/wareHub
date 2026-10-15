@@ -43,16 +43,11 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
             entity.Property(x => x.GhiChu).HasMaxLength(500);
             entity.Property(x => x.Producer).HasMaxLength(100);
             entity.Property(x => x.IpAddress).HasMaxLength(45);
-            // Khớp đúng độ dài cột ALTER TABLE tương ứng trong Program.cs (EnsureDeviceColumnAsync) — thiếu khai báo ở đây
-            // khiến CSDL mới (EnsureCreatedAsync) tạo cột không giới hạn độ dài, khác hẳn CSDL đã nâng cấp (ALTER TABLE ... VARCHAR(n)).
             entity.Property(x => x.OsName).HasMaxLength(100);
             entity.Property(x => x.OfficeName).HasMaxLength(100);
             entity.Property(x => x.PhoneNumber).HasMaxLength(30);
             entity.Property(x => x.SimSerial).HasMaxLength(50);
             entity.Property(x => x.GlpiType).HasMaxLength(20);
-            // Tên chỉ mục khớp đúng chữ với EnsureIndexAsync(db, "devices", "IX_devices_glpi_type_id", ...) trong Program.cs
-            // — nếu khác tên, CSDL mới (EnsureCreatedAsync tạo theo tên quy ước EF) và bước Ensure* sau đó (dò theo tên cũ,
-            // không thấy nên tạo thêm 1 lần nữa) sẽ tạo ra 2 chỉ mục trùng nhau trên cùng 2 cột.
             entity.HasIndex(x => new { x.GlpiType, x.GlpiId }).HasDatabaseName("IX_devices_glpi_type_id");
             entity.HasIndex(x => x.Loai);
             entity.HasIndex(x => x.LifecycleStatus);
@@ -65,16 +60,12 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
             entity.Property(x => x.PrintedAt).HasDefaultValueSql("CURRENT_TIMESTAMP(6)").ValueGeneratedOnAdd();
             entity.HasIndex(x => x.PrintedAt);
             entity.HasOne(x => x.Device).WithMany(x => x.PrintHistory).HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
-            // KHÔNG cấu hình khoá ngoại tới User (giống Handover bên dưới) — xoá tài khoản không được chặn bởi lịch sử in
-            // tem; tên người in đã chụp sẵn vào PrintedByName lúc ghi, không cần join bảng users để hiển thị.
         });
         modelBuilder.Entity<Handover>(entity =>
         {
             entity.HasKey(x => x.Id);
             entity.Property(x => x.No).HasMaxLength(12).IsRequired();
             entity.Property(x => x.Kind).HasMaxLength(10).IsRequired();
-            // Máy tính và điện thoại/tablet có 2 dãy số riêng, được phép trùng chuỗi "no" GIỮA 2 nhóm — chỉ không được
-            // trùng trong CÙNG 1 nhóm, nên khoá duy nhất phải gộp cả (no, kind), không còn là riêng "no" như trước.
             entity.HasIndex(x => new { x.No, x.Kind }).IsUnique().HasDatabaseName("IX_handovers_no_kind");
             entity.Property(x => x.DeviceMa).HasMaxLength(50);
             entity.Property(x => x.FullName).HasMaxLength(100);
@@ -114,7 +105,6 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
             entity.HasIndex(x => x.ChangedAt);
             entity.HasIndex(x => x.DeviceId);
             entity.HasOne(x => x.Device).WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
-            // KHÔNG cấu hình khoá ngoại tới User — lý do giống PrintHistory ở trên (dùng ChangedByName thay vì join).
         });
     }
 }

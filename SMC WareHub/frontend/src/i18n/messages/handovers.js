@@ -1,4 +1,3 @@
-// Trang Phiếu bàn giao và hộp thoại soạn phiếu. Nội dung in trên phiếu/tem là biểu mẫu chính thức nên không dịch.
 export const handovers = {
   'hvp.title': ['Phiếu bàn giao', 'Handover slips'],
   'hvp.printSelected': ['In {count} phiếu đã chọn', 'Print {count} selected slips'],

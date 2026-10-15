@@ -23,7 +23,7 @@ export function Handovers() {
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [search, setSearch] = useState('');
-  const [kind, setKind] = useState(''); // '' = tất cả, 'computer', 'phone'
+  const [kind, setKind] = useState('');
   const [error, setError] = useState('');
   const [selected, setSelected] = useState(() => new Map());
   const [openItem, setOpenItem] = useState(null);
@@ -54,8 +54,6 @@ export function Handovers() {
 
   useReconnect(fetchItems);
 
-  // Dùng id (không phải "no") làm khoá chọn/so khớp — "no" không còn là duy nhất toàn cục từ khi tách 2 dãy số
-  // máy tính/điện thoại-tablet (2 nhóm có thể cùng ra 1 chuỗi "no" giống nhau, phân biệt nhau bằng cột "kind").
   function toggleOne(item) {
     setSelected((previous) => {
       const next = new Map(previous);

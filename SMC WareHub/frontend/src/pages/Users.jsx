@@ -20,10 +20,10 @@ export function Users() {
   const [ldapModalOpen, setLdapModalOpen] = useState(false);
   const [ldapQuery, setLdapQuery] = useState('');
   const [ldapResults, setLdapResults] = useState(null);
-  const [ldapTruncated, setLdapTruncated] = useState(false); // AD còn nhiều hơn số đã lấy về, chưa liệt kê hết
+  const [ldapTruncated, setLdapTruncated] = useState(false);
   const [ldapSearching, setLdapSearching] = useState(false);
   const [ldapError, setLdapError] = useState('');
-  const [ldapSelected, setLdapSelected] = useState(new Set()); // username đã tick chọn để thêm hàng loạt
+  const [ldapSelected, setLdapSelected] = useState(new Set());
   const [ldapBulkRole, setLdapBulkRole] = useState('staff');
   const [ldapAdding, setLdapAdding] = useState(false);
 
@@ -57,7 +57,6 @@ export function Users() {
       const data = await api.get('/users/ldap-search', { q: query });
       setLdapResults(data.results);
       setLdapTruncated(!!data.truncated);
-      // Lọc lại theo đúng tập kết quả mới (tránh giữ tick của những dòng không còn trong danh sách sau khi tìm lại).
       const names = new Set(data.results.map((r) => r.username));
       setLdapSelected((prev) => new Set([...prev].filter((u) => names.has(u))));
     } catch (err) {
@@ -70,7 +69,6 @@ export function Users() {
   function openLdapModal() {
     setLdapQuery(''); setLdapResults(null); setLdapError(''); setLdapSelected(new Set()); setLdapBulkRole('staff');
     setLdapModalOpen(true);
-    // Mở khung là thấy ngay danh sách gợi ý (không bắt gõ tìm trước) — gõ tìm sau đó chỉ để lọc bớt lại.
     runLdapSearch('');
   }
 
@@ -96,8 +94,6 @@ export function Users() {
     if (ldapSelected.size === 0) return;
     setLdapError(''); setLdapAdding(true);
     const chosen = (ldapResults || []).filter((r) => ldapSelected.has(r.username));
-    // Mỗi tài khoản thêm độc lập, không có thứ tự/số đếm nào cần giữ liền mạch (khác hẳn số phiếu bàn giao) — chạy
-    // song song cho nhanh thay vì đợi từng cái một, 1 người lỗi không chặn những người còn lại.
     const outcomes = await Promise.allSettled(
       chosen.map((r) => api.post('/users/ldap-add', { username: r.username, full_name: r.full_name, role: ldapBulkRole })),
     );
@@ -106,7 +102,7 @@ export function Users() {
     fetchUsers();
     if (failed > 0) {
       setLdapError(t('users.ldapBulkPartialFail', { failed, total: chosen.length }));
-      runLdapSearch(ldapQuery.trim()); // làm mới danh sách: ai thêm thành công thì biến mất, ai lỗi vẫn còn để thử lại
+      runLdapSearch(ldapQuery.trim());
     } else {
       setLdapModalOpen(false);
     }
@@ -219,7 +215,6 @@ export function Users() {
             <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
               <option value="staff">{t('role.staff')}</option>
               <option value="admin">{t('role.adminShort')}</option>
-              {/* Chỉ superadmin được thấy/chọn mục này — khớp với giới hạn backend (admin thường chọn sẽ bị từ chối 403). */}
               {(isSuperAdmin || form.role === 'superadmin') && <option value="superadmin">{t('role.superadmin')}</option>}
             </select>
 

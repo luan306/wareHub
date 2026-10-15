@@ -2,20 +2,17 @@ using System.Text.RegularExpressions;
 
 namespace WareHub.Api.Services;
 
-/// <summary>Quy tắc mật khẩu khi tạo tài khoản / đặt lại mật khẩu (không áp dụng khi đăng nhập, để mật khẩu cũ vẫn dùng được cho tới khi đổi).</summary>
 public static class PasswordPolicy
 {
     public const int MinLength = 10;
-    public const int MaxLength = 128; // mật khẩu quá dài làm việc băm tốn CPU vô ích
+    public const int MaxLength = 128;
 
-    // Gốc chữ của các mật khẩu phổ biến: bỏ số/ký tự đặc biệt rồi so, nên "Admin123@" hay "matkhau2024" đều bị loại.
     private static readonly HashSet<string> CommonRoots = new(StringComparer.OrdinalIgnoreCase)
     {
         "password", "passw", "admin", "administrator", "root", "user", "qwerty", "qwertyuiop", "abc", "abcdef", "letmein",
         "welcome", "iloveyou", "matkhau", "mk", "warehub", "smc", "smcmfg", "test", "guest", "changeme", "secret", "login",
     };
 
-    /// <summary>Thông báo lỗi (tiếng Việt) hoặc null nếu mật khẩu đạt yêu cầu.</summary>
     public static string? Validate(string? password, string? username = null)
     {
         if (string.IsNullOrEmpty(password) || password.Length < MinLength) return $"Mật khẩu cần tối thiểu {MinLength} ký tự";

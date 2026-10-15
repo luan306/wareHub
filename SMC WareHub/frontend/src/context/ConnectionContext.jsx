@@ -4,12 +4,6 @@ import { connectionEvents } from '../api/connection';
 import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 import { useAuth } from './AuthContext';
 
-// Theo dõi kết nối tới máy chủ để giao diện báo đúng tình huống thay vì lỗi "Failed to fetch" khó hiểu:
-//   offline     = trình duyệt mất mạng                       -> thanh cảnh báo (vẫn xem được dữ liệu đã tải)
-//   unreachable = có mạng nhưng không tới được máy chủ       -> màn hình chắn (đang cập nhật/khởi động lại)
-//   maintenance = máy chủ báo đang bảo trì (503)             -> màn hình chắn kèm thông báo
-// Khi mất kết nối, cứ vài giây hỏi /api/health; hệ thống sẵn sàng lại thì tự tiếp tục (tự tải lại trang nếu máy chủ
-// vừa được cập nhật phiên bản mới) và báo các trang tải lại dữ liệu qua sự kiện 'warehub:reconnected'.
 const ConnectionContext = createContext(null);
 
 const POLL_MS = 4000;
@@ -31,8 +25,8 @@ export function ConnectionProvider({ children }) {
   const { user, isAdmin } = useAuth();
   const [browserOnline, setBrowserOnline] = useState(() => navigator.onLine !== false);
   const [server, setServer] = useState({ state: 'ok' });
-  const [maintenanceInfo, setMaintenanceInfo] = useState(null); // chỉ dành cho admin: bảo trì đang bật
-  const [loginNotice, setLoginNotice] = useState(null); // người CHƯA đăng nhập: bảo trì đang bật (chỉ báo, không chắn)
+  const [maintenanceInfo, setMaintenanceInfo] = useState(null);
+  const [loginNotice, setLoginNotice] = useState(null);
   const [newVersion, setNewVersion] = useState(false);
   const [notice, setNotice] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -53,7 +47,6 @@ export function ConnectionProvider({ children }) {
     setServer((current) => (current.state === next.state && current.message === next.message ? current : next));
   }, []);
 
-  // Máy chủ hoạt động lại. Nếu vừa được cập nhật phiên bản mới thì tải lại trang để lấy giao diện mới.
   const recover = useCallback((health) => {
     if (health?.version && versionRef.current && health.version !== versionRef.current && hadProblemRef.current) {
       window.location.reload();
@@ -77,8 +70,7 @@ export function ConnectionProvider({ children }) {
     if (!health) return false;
     if (health.maintenance && !adminRef.current) {
       let info = { state: 'maintenance' };
-      try { const detail = await (await fetch('/api/maintenance', { cache: 'no-store' })).json(); info = { state: 'maintenance', message: detail.message, until: detail.until }; } catch { /* dùng thông báo mặc định */ }
-      // Chưa đăng nhập: chỉ báo ở trang đăng nhập, không chắn — để admin còn đăng nhập vào tắt bảo trì.
+      try { const detail = await (await fetch('/api/maintenance', { cache: 'no-store' })).json(); info = { state: 'maintenance', message: detail.message, until: detail.until }; } catch {}
       if (!userRef.current && serverStateRef.current === 'ok') { setLoginNotice(info); return false; }
       markProblem(info);
       return false;
@@ -102,7 +94,6 @@ export function ConnectionProvider({ children }) {
     else if (event.type === 'ok' && serverStateRef.current !== 'ok') checkNow();
   }), [markProblem, checkNow]);
 
-  // Đang có sự cố: hỏi /api/health định kỳ cho tới khi hệ thống sẵn sàng.
   const inProblem = status !== 'ok';
   useEffect(() => {
     if (!inProblem) return undefined;
@@ -110,7 +101,6 @@ export function ConnectionProvider({ children }) {
     return () => clearInterval(timer);
   }, [inProblem, checkNow]);
 
-  // Lúc bình thường: mỗi 30 giây kiểm tra nhẹ để biết có phiên bản mới / bảo trì đang bật (admin) / máy chủ vừa tắt.
   useEffect(() => {
     let cancelled = false;
     const check = async () => {
@@ -124,7 +114,7 @@ export function ConnectionProvider({ children }) {
       if (!versionRef.current && health.version) versionRef.current = health.version;
       if (health.maintenance) {
         if (adminRef.current) {
-          try { const info = await api.get('/maintenance'); if (!cancelled) setMaintenanceInfo(info.enabled ? info : null); } catch { /* bỏ qua */ }
+          try { const info = await api.get('/maintenance'); if (!cancelled) setMaintenanceInfo(info.enabled ? info : null); } catch {}
         } else {
           checkNow();
         }
@@ -138,22 +128,17 @@ export function ConnectionProvider({ children }) {
     return () => { cancelled = true; clearInterval(timer); };
   }, [user?.id, isAdmin, markProblem, checkNow]);
 
-  // Admin bật/tắt chế độ bảo trì; enabled=true kèm thông báo và giờ dự kiến xong (tuỳ chọn).
   const setMaintenance = useCallback(async (enabled, message, until) => {
     const info = await api.put('/maintenance', { enabled, message: message || null, until: until || null });
     setMaintenanceInfo(info.enabled ? info : null);
     return info;
   }, []);
 
-  // Người chưa đăng nhập bỏ qua màn hình chắn để đăng nhập bằng tài khoản admin.
   const dismissMaintenance = useCallback(() => {
     hadProblemRef.current = false;
     setServer({ state: 'ok' });
   }, []);
 
-  // Object mới mỗi lần render sẽ làm MỌI nơi dùng useConnection() vẽ lại theo — kể cả khi giá trị thực chất không đổi.
-  // Provider này bọc cả app và tự kiểm tra định kỳ (mỗi 30 giây khi bình thường), nên không nhớ lại (useMemo) sẽ khiến
-  // toàn bộ cây component vẽ lại theo đúng chu kỳ đó dù đang mở màn hình gì (từng gây giật khi đang xem/sửa phiếu bàn giao).
   const value = useMemo(() => ({
     status,
     loginNotice,
@@ -173,7 +158,6 @@ export function useConnection() {
   return useContext(ConnectionContext);
 }
 
-// Chạy callback (thường là tải lại dữ liệu của trang) mỗi khi kết nối được khôi phục.
 export function useReconnect(callback) {
   const ref = useRef(callback);
   ref.current = callback;

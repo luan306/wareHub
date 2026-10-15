@@ -21,10 +21,8 @@ export function buildLoanData() {
   };
 }
 
-// Vài món hay cho mượn lặt vặt không phải thiết bị chính (không cần gõ tay mỗi lần) — bấm là điền thẳng vào ô tên.
 const MANUAL_DEVICE_PRESETS = ['Chuột', 'Bàn phím', 'Thiết bị trình chiếu/Máy chiếu', 'Sạc/Adapter', 'Cáp HDMI/VGA', 'Loa/Tai nghe'];
 
-// "2026-10-13T09:30" (giá trị ô <input type="datetime-local">) hoặc chuỗi ISO từ server -> cùng 1 định dạng input.
 function toInputValue(value) {
   if (!value) return '';
   const d = value instanceof Date ? value : new Date(value);
@@ -33,7 +31,6 @@ function toInputValue(value) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-// Giá trị ô datetime-local ("...T09:30") -> chuỗi gửi lên server (thêm giây để khớp định dạng ISO đầy đủ).
 function toApiValue(inputValue) {
   return inputValue ? `${inputValue}:00` : null;
 }
@@ -46,8 +43,6 @@ export function formatDateTimeDisplay(value) {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-// Chữ ký vẽ bằng chuột/ngón tay — chỉ dùng lúc TẠO phiếu mới (chụp lại ngay lúc mượn); phiếu đã lưu hiện lại dưới
-// dạng ảnh tĩnh (xem LoanModal, nhánh data.signature), không cho vẽ lại đè lên chữ ký đã có.
 function SignaturePad({ onChange }) {
   const { t } = useT();
   const canvasRef = useRef(null);
@@ -89,9 +84,6 @@ function SignaturePad({ onChange }) {
     window.removeEventListener('mouseup', onWindowMouseUp);
     onChange(emptyRef.current ? '' : canvasRef.current.toDataURL('image/png'));
   }
-  // Theo dõi chuột ở mức window (không chỉ trên canvas) trong lúc đang kéo — khung ký khá nhỏ, chuột lướt ra ngoài
-  // biên chỉ trong lúc đang vẽ (không phải lúc thả nút) không được tính là kết thúc nét, chỉ dừng khi THẢ CHUỘT dù
-  // ở đâu. Bắt onMouseLeave ngay trên canvas (cách cũ) cắt ngang nét vẽ oan, có lúc cắt ngay từ lúc mới bấm xuống.
   function onWindowMouseMove(event) { if (drawingRef.current) draw(pos(event)); }
   function onWindowMouseUp() { if (drawingRef.current) finish(); }
   function startMouse(event) {
@@ -135,7 +127,6 @@ function SignaturePad({ onChange }) {
   );
 }
 
-// Phiếu in — dùng cho cả bản xem trước trong khung soạn phiếu lẫn lúc in thật/in lại hàng loạt từ trang danh sách.
 export function LoanSheet({ no, data, returnedAt, createdByName }) {
   const devices = data.devices || [];
   return (
@@ -177,7 +168,7 @@ export function LoanSheet({ no, data, returnedAt, createdByName }) {
           </tr>
           <tr>
             <th>Actual return <i className="hv-vi-inline">(Ngày trả thực tế)</i>:</th>
-            <td className="hv-center" colSpan="3">{returnedAt ? formatDateTimeDisplay(returnedAt) : ' '}</td>
+            <td className="hv-center" colSpan="3">{returnedAt ? formatDateTimeDisplay(returnedAt) : ' '}</td>
           </tr>
         </tbody>
       </table>
@@ -252,8 +243,6 @@ function usePickerSearch(load) {
   return { search, setSearch, rows, error };
 }
 
-// Tìm & thêm thiết bị cho mượn (nhiều cái cùng lúc) — không tự đóng sau mỗi lần chọn, giống AttachmentPicker của
-// phiếu bàn giao, để chọn liên tiếp nhiều thiết bị rồi tự bấm "×" khi xong.
 function LoanDevicePicker({ excludeIds, onPick, onCancel }) {
   const { t } = useT();
   const picker = usePickerSearch((search) => api.get('/devices', { search, page: 1, pageSize: 20 }).then((result) => result.devices));
@@ -287,9 +276,6 @@ function LoanDevicePicker({ excludeIds, onPick, onCancel }) {
   );
 }
 
-// Gõ họ tên HOẶC mã số nhân viên -> gợi ý trực tiếp từ Active Directory (không cần biết sẵn tài khoản WareHub nào,
-// mọi nhân viên trong AD đều tra được) — chọn 1 kết quả tự điền đúng tên hiển thị, MSNV, bộ phận trong AD (field nào
-// AD không khai báo thì giữ nguyên giá trị đang có, xem handleLdapPick). Dùng chung cho cả ô Họ tên lẫn ô MSNV.
 function LdapAutocompleteField({ value, disabled, onChange, onSelect }) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
@@ -350,14 +336,11 @@ function LdapAutocompleteField({ value, disabled, onChange, onSelect }) {
   );
 }
 
-// saved: dòng phiếu lấy từ danh sách (đã có id, no, status...) khi mở để xem/sửa/in lại; để trống -> lập phiếu mới.
 export function LoanModal({ saved, onClose }) {
   const { t } = useT();
   const { user } = useAuth();
   const isReturned = saved?.status === 'returned';
-  const editableFields = !saved || !isReturned; // phiếu đã trả thì chỉ xem/in lại, không sửa được nữa
-  // Phiếu đã lưu thì hiện đúng tên người đã lập (chụp lại lúc lưu); phiếu đang soạn mới thì xem trước bằng tên
-  // người đang đăng nhập (chính là người sẽ đứng tên khi bấm Lưu/In).
+  const editableFields = !saved || !isReturned;
   const createdByName = saved?.created_by_name || user?.full_name || '';
   const [allocated, setAllocated] = useState(saved ? { id: saved.id, no: saved.no } : null);
   const [data, setData] = useState(() => (saved ? {
@@ -390,20 +373,15 @@ export function LoanModal({ saved, onClose }) {
   function removeDevice(id) {
     setData((current) => ({ ...current, devices: (current.devices || []).filter((item) => item.id !== id) }));
   }
-  // Thiết bị chưa có trong hệ thống (chưa đồng bộ GLPI, đồ phụ kiện lặt vặt chưa gắn mã...) — cho mượn vẫn cần ghi
-  // nhận được, không bắt buộc phải có sẵn trong danh sách /api/devices. id tự sinh ở client, không trỏ tới thiết bị thật.
   function addManualDevice() {
     const name = manualName.trim();
     if (!name) return;
     addDevice({ id: `manual-${Date.now()}`, ma: manualNote.trim() || null, ten: name, loai: 'other', model: null, manual: true });
     setManualName(''); setManualNote(''); setManualOpen(false);
   }
-  // Mấy món hay cho mượn kèm máy, không phải lúc nào cũng gõ tay — bấm 1 cái thêm thẳng, khỏi mở form nhập.
   function addManualPreset(name) {
     addDevice({ id: `manual-${Date.now()}`, ma: null, ten: name, loai: 'other', model: null, manual: true });
   }
-  // Chọn 1 kết quả AD — dù bấm từ ô Họ tên hay ô MSNV đều xử lý giống nhau: tên luôn lấy theo AD (đã bấm chọn đúng
-  // người rồi), MSNV lấy theo AD nếu có khai báo, bộ phận chỉ điền khi đang trống (không đè lên nếu đã gõ tay sẵn).
   function handleLdapPick(match) {
     setData((current) => ({
       ...current,

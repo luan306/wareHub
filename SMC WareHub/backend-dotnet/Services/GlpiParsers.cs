@@ -4,15 +4,8 @@ using System.Text.RegularExpressions;
 
 namespace WareHub.Api.Services;
 
-/// <summary>
-/// Đọc phần chi tiết của 1 máy tính từ các phản hồi của GLPI (Component/Processor, Memory, HardDrive, cổng mạng,
-/// hệ điều hành, phần mềm) thành chuỗi ngắn gọn để điền vào thiết bị/phiếu bàn giao.
-/// Không giả định cứng hình dạng JSON (mỗi phiên bản GLPI hơi khác nhau): tìm tên trong đối tượng lồng nhau
-/// (vd. "processor": { "name": ... }) hoặc ở ngay dòng, và bỏ qua những gì không hiểu thay vì báo lỗi.
-/// </summary>
 public static class GlpiParsers
 {
-    // Danh sách kết quả có thể là mảng trần, hoặc bọc trong { "items": [...] } / { "data": [...] }.
     public static IReadOnlyList<JsonElement> Items(JsonElement? body)
     {
         if (body is not { } root) return [];
@@ -27,7 +20,6 @@ public static class GlpiParsers
         return [];
     }
 
-    // Tên hiển thị của 1 dòng: ưu tiên đối tượng lồng nhau theo khoá gợi ý (processor -> { name }), rồi tới name/designation.
     public static string? NameOf(JsonElement item, params string[] nestedKeys)
     {
         if (item.ValueKind == JsonValueKind.String) return Clean(item.GetString());
@@ -60,7 +52,6 @@ public static class GlpiParsers
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    // Số (MiB) ở dòng hoặc trong đối tượng lồng nhau; chấp nhận cả số lẫn chuỗi số.
     private static double? NumberOf(JsonElement item, params string[] keys)
     {
         foreach (var key in keys)
@@ -79,7 +70,6 @@ public static class GlpiParsers
         _ => null,
     };
 
-    // "Intel(R) Core(TM) i5-1335U CPU @ 4.60GHz" -> "Intel Core i5-1335U @ 4.60GHz"
     public static string? Cpu(JsonElement? body)
     {
         var names = Items(body)
@@ -92,13 +82,11 @@ public static class GlpiParsers
         return names.Count == 0 ? null : string.Join(" + ", names);
     }
 
-    // Tổng dung lượng RAM (GLPI lưu MiB): 1 thanh -> "8GB"; nhiều thanh -> "16GB (2 x 8GB)".
     public static string? Ram(JsonElement? body)
     {
         var sizes = Items(body).Select(i => NumberOf(i, "size", "capacity")).Where(s => s is > 0).Select(s => s!.Value).ToList();
         if (sizes.Count == 0)
         {
-            // Không có số: dùng tên (vd. "8GB") nếu có.
             var names = Items(body).Select(i => NameOf(i, "memory", "devicememory", "device")).Where(n => n is not null).Distinct().ToList();
             return names.Count == 0 ? null : string.Join(" + ", names);
         }
@@ -108,9 +96,6 @@ public static class GlpiParsers
         return text;
     }
 
-    // Ổ cứng: ưu tiên tên model do GLPI đặt (vd. "SSD 250 GB"); không có tên thì dùng dung lượng. Khoá lồng nhau thật
-    // của GLPI là "hard_drive" (có gạch dưới, không phải "harddrive"); "capacity" ở đây tính theo GB trực tiếp (vd.
-    // capacity=256 cho ổ "SSD 250 GB"), khác với "size" của RAM vốn tính theo MiB — không chia lại cho 1024.
     public static string? Storage(JsonElement? body)
     {
         var parts = new List<string>();
@@ -137,7 +122,6 @@ public static class GlpiParsers
     private static readonly Regex IPv4 = new(@"^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$", RegexOptions.Compiled);
     private static readonly string[] NotAnAddressKeys = ["mask", "netmask", "gateway", "subnet", "dns", "broadcast", "network", "netaddr"];
 
-    // IP: gom mọi chuỗi IPv4 hợp lệ trong phản hồi (trừ mặt nạ mạng/gateway/loopback/link-local), không trùng lặp.
     public static string? Ip(params JsonElement?[] bodies)
     {
         var found = new List<string>();
@@ -166,7 +150,6 @@ public static class GlpiParsers
         }
     }
 
-    // Hệ điều hành -> đúng tên lựa chọn trong form phiếu (Win 11/10 Professional); loại khác giữ tên gốc của GLPI.
     public static string? Windows(JsonElement? body)
     {
         var name = Items(body)
@@ -183,12 +166,10 @@ public static class GlpiParsers
         return name;
     }
 
-    // Office: tìm phần mềm có "Office" trong tên; lấy năm/365 nếu có -> "Office 365", "Office 2019"...
     public static string? Office(JsonElement? body)
     {
         var names = Items(body).SelectMany(AllNames).Where(n => (n.Contains("office", StringComparison.OrdinalIgnoreCase) || n.Contains("microsoft 365", StringComparison.OrdinalIgnoreCase)) && !n.Contains("teams", StringComparison.OrdinalIgnoreCase)).ToList();
         if (names.Count == 0) return null;
-        // Ưu tiên tên có ghi năm/365 (bản Office thật); "Microsoft Office Professional Plus 2019 - en-us" -> Office 2019.
         foreach (var name in names)
         {
             var m = Regex.Match(name, @"\b(365|2013|2016|2019|2021|2024)\b");
@@ -199,17 +180,12 @@ public static class GlpiParsers
 
     private static readonly string[] MsisdnKeys = ["msin", "mobile_subscriber_identification_number", "msisdn", "phone_number", "phonenumber", "number"];
 
-    // GLPI không có sẵn liên kết SIM ↔ điện thoại qua API đáng tin cậy giữa các bản; nên khớp qua NGƯỜI ĐANG DÙNG:
-    // 1 SIM và 1 điện thoại cùng gán cho đúng 1 người thì coi SIM đó là của máy đó. Người có từ 2 SIM hoặc 2 điện thoại
-    // trở lên thì không đủ để khớp chắc chắn cái nào với cái nào — bỏ qua để tránh gán sai người dùng khác.
     public static Dictionary<int, GlpiPhoneDetails> MatchPhonesByUser(IReadOnlyList<GlpiAsset> phones, IReadOnlyList<GlpiAsset> simcards)
     {
         var simsByUser = simcards
             .Where(s => !string.IsNullOrWhiteSpace(s.User?.Name))
             .GroupBy(s => s.User!.Name!.Trim(), StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
-        // Đếm số điện thoại theo người dùng: thiếu bước này thì người có 2+ điện thoại nhưng chỉ 1 SIM sẽ bị gán
-        // nhầm CÙNG 1 số điện thoại/serial SIM cho cả 2 máy (lặp qua từng điện thoại, không kiểm tra số lượng máy).
         var phoneCountByUser = phones
             .Where(p => !string.IsNullOrWhiteSpace(p.User?.Name))
             .GroupBy(p => p.User!.Name!.Trim(), StringComparer.OrdinalIgnoreCase)
@@ -229,7 +205,6 @@ public static class GlpiParsers
         return result;
     }
 
-    // Mọi chuỗi ở khoá "name" trong cây JSON (phần mềm thường lồng: softwareversion -> software -> name).
     private static IEnumerable<string> AllNames(JsonElement element)
     {
         switch (element.ValueKind)

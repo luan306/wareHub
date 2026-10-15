@@ -1,11 +1,5 @@
 namespace WareHub.Api.Services;
 
-/// <summary>
-/// Đồng bộ GLPI chạy nền: bấm nút chỉ "bắt đầu" rồi trả lời ngay, trình duyệt hỏi tiến độ định kỳ.
-/// Trước đây cả lần đồng bộ nằm trong 1 yêu cầu HTTP; với hàng nghìn thiết bị nó chạy lâu hơn thời gian chờ của trình duyệt (30 giây),
-/// trình duyệt bỏ cuộc, máy chủ thấy khách ngắt kết nối và huỷ luôn việc đồng bộ giữa chừng.
-/// Mỗi lúc chỉ chạy 1 lần đồng bộ; trạng thái nằm trong bộ nhớ (mất khi khởi động lại máy chủ, khi đó bấm đồng bộ lại là được).
-/// </summary>
 public sealed class GlpiSyncJob
 {
     private readonly object _lock = new();
@@ -16,7 +10,6 @@ public sealed class GlpiSyncJob
     private object? _result;
     private string? _error;
 
-    /// <summary>Bắt đầu chạy nền; trả về false nếu đang có 1 lần đồng bộ khác chạy.</summary>
     public bool TryStart(Func<GlpiSyncJob, Task> work, ILogger logger)
     {
         lock (_lock)
@@ -43,7 +36,6 @@ public sealed class GlpiSyncJob
         return true;
     }
 
-    /// <summary>phase: lists | computers | phones | saving. done/total dùng cho thanh tiến độ (0 = không có số).</summary>
     public void Report(string phase, int done = 0, int total = 0)
     {
         lock (_lock) { _phase = phase; _done = done; _total = total; }

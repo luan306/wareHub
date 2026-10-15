@@ -4,9 +4,6 @@ namespace WareHub.Api.Services;
 
 public sealed record MaintenanceInfo(bool Enabled, string Message, DateTimeOffset? StartedAt, DateTimeOffset? Until);
 
-// Chế độ bảo trì: bật khi tồn tại file cờ maintenance.json (mặc định cạnh ứng dụng, đổi bằng Maintenance:FlagFile).
-// Dùng file thay vì biến trong bộ nhớ để trạng thái còn nguyên khi ứng dụng được khởi động lại lúc cập nhật code,
-// và để có thể bật/tắt bằng script (scripts/maintenance.ps1) ngay cả khi ứng dụng đang tắt.
 public sealed class MaintenanceState
 {
     public const string DefaultMessage = "Hệ thống đang bảo trì, vui lòng quay lại sau ít phút.";
@@ -26,7 +23,6 @@ public sealed class MaintenanceState
             : Path.GetFullPath(configured, environment.ContentRootPath);
     }
 
-    // Gọi ở mọi yêu cầu nên chỉ kiểm tra lại file tối đa 1 lần/giây.
     public MaintenanceInfo Current
     {
         get
@@ -60,7 +56,6 @@ public sealed class MaintenanceState
         }
     }
 
-    // File tồn tại = đang bảo trì (trừ khi ghi rõ "enabled": false). File hỏng vẫn tính là đang bảo trì cho an toàn.
     private MaintenanceInfo Read()
     {
         try

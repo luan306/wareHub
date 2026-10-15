@@ -3,8 +3,6 @@ import { useAuth } from '../context/AuthContext';
 import { useConnection } from '../context/ConnectionContext';
 import { useT } from '../i18n';
 
-// Dành cho quản trị viên: bật/tắt chế độ bảo trì khi cập nhật code. Khi bật, người dùng khác thấy màn hình
-// "đang bảo trì"; admin vẫn dùng bình thường và thấy thanh nhắc ở đầu trang để nhớ tắt sau khi cập nhật xong.
 export function MaintenanceControl() {
   const { isAdmin } = useAuth();
   const { t } = useT();

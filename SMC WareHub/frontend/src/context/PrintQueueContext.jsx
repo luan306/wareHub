@@ -13,11 +13,10 @@ function loadQueue() {
 }
 
 export function PrintQueueProvider({ children }) {
-  // Lưu vào localStorage (không chỉ giữ trong state) để F5/đóng trình duyệt không làm mất hàng đợi đang gom dở.
   const [queue, setQueue] = useState(loadQueue);
 
   useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(queue)); } catch { /* bỏ qua, vd. storage đầy */ }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(queue)); } catch {}
   }, [queue]);
 
   const addDevices = useCallback((devices) => {
@@ -34,7 +33,6 @@ export function PrintQueueProvider({ children }) {
 
   const clearQueue = useCallback(() => setQueue([]), []);
 
-  // Ghi nhớ (useMemo): không tạo object mới mỗi lần render, tránh vẽ lại mọi nơi dùng usePrintQueue() một cách vô ích.
   const value = useMemo(() => ({ queue, addDevices, removeDevice, clearQueue }), [queue, addDevices, removeDevice, clearQueue]);
 
   return <PrintQueueContext.Provider value={value}>{children}</PrintQueueContext.Provider>;

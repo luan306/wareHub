@@ -4,7 +4,6 @@ import { devices } from './messages/devices';
 import { handovers } from './messages/handovers';
 import { loans } from './messages/loans';
 
-// Mỗi khoá là [tiếng Việt, tiếng Anh] để hai ngôn ngữ luôn nằm cạnh nhau, khó bỏ sót.
 const MESSAGES = { ...common, ...devices, ...handovers, ...loans };
 
 export const LANGUAGES = ['vi', 'en'];
@@ -19,7 +18,6 @@ function readStoredLanguage() {
   }
 }
 
-// Ngôn ngữ hiện tại cũng được giữ ở mức module để code ngoài React (api client, confirm/alert) dùng được.
 let currentLanguage = readStoredLanguage();
 
 export function translate(key, vars) {
@@ -29,7 +27,6 @@ export function translate(key, vars) {
   return text;
 }
 
-// Lỗi trả về từ backend là tiếng Việt; khi giao diện đang ở tiếng Anh thì dịch các câu đã biết, câu lạ giữ nguyên.
 export function translateServerMessage(message) {
   if (currentLanguage !== 'en' || !message) return message;
   const exact = serverMessages.exact[message];
@@ -50,14 +47,13 @@ export function LanguageProvider({ children }) {
 
   const setLanguage = useCallback((next) => {
     if (!LANGUAGES.includes(next)) return;
-    currentLanguage = next; // đặt ngay để mọi lần dịch trong lượt render kế tiếp đã dùng ngôn ngữ mới
-    try { localStorage.setItem(STORAGE_KEY, next); } catch { /* bỏ qua */ }
+    currentLanguage = next;
+    try { localStorage.setItem(STORAGE_KEY, next); } catch {}
     setLanguageState(next);
   }, []);
 
   useEffect(() => { document.documentElement.lang = language; }, [language]);
 
-  // Đổi identity của t khi ngôn ngữ đổi để các component dùng useT() render lại.
   const value = useMemo(() => ({
     language,
     setLanguage,

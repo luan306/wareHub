@@ -46,8 +46,6 @@ export function Loans() {
     }
   }, [search, status, page, pageSize]);
 
-  // Số đếm theo trạng thái (luôn tính trên TOÀN BỘ kết quả khớp tìm kiếm, không bị ảnh hưởng bởi tab đang chọn) — để
-  // nhìn 1 cái biết ngay đang có bao nhiêu phiếu quá hạn mà không cần bấm lần lượt từng tab ra đếm.
   const fetchCounts = useCallback(async () => {
     try {
       const [borrowed, overdue, returned] = await Promise.all([
@@ -56,7 +54,7 @@ export function Loans() {
         api.get('/loans', { search, status: 'returned', pageSize: 1 }),
       ]);
       setCounts({ borrowed: borrowed.total, overdue: overdue.total, returned: returned.total });
-    } catch { /* chỉ là số tóm tắt, lỗi thì bỏ qua không chặn trang chính */ }
+    } catch {}
   }, [search]);
 
   const refresh = useCallback(() => { fetchItems(); fetchCounts(); }, [fetchItems, fetchCounts]);
@@ -90,8 +88,6 @@ export function Loans() {
 
   function selectStatus(value) { setPage(1); setStatus(value); }
 
-  // Xuất CSV (mở được thẳng bằng Excel) toàn bộ phiếu khớp tìm kiếm/tab đang chọn — không chỉ trang đang xem, giống
-  // hệt cách "Xuất kho" ở trang Thiết bị: lấy trang đầu để biết tổng số trang rồi tải song song các trang còn lại.
   async function exportLoans() {
     setExporting(true);
     setError('');

@@ -1,4 +1,3 @@
-// Trang Thiết bị: bảng, hàng đợi in tem, form thêm/sửa, đồng bộ GLPI, tạo phiếu hàng loạt.
 export const devices = {
   'dev.title': ['Quản lý thiết bị', 'Device management'],
   'dev.exportInventory': ['Xuất kho (CSV)', 'Export Inventory'],

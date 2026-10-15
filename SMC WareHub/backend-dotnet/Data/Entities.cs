@@ -11,7 +11,6 @@ public sealed class User
     [Column("password_hash")] public string PasswordHash { get; set; } = "";
     [Column("full_name")] public string FullName { get; set; } = "";
     public string Role { get; set; } = "staff";
-    /// <summary>"local" (mật khẩu tự quản ở đây) hoặc "ldap" (xác thực qua Active Directory, tạo qua "Thêm từ LDAP").</summary>
     [Column("auth_source")] public string AuthSource { get; set; } = "local";
     [Column("is_active")] public bool IsActive { get; set; } = true;
     [Column("created_at")] public DateTime CreatedAt { get; set; }
@@ -37,16 +36,10 @@ public sealed class Device
     [Column("ghi_chu")] public string? GhiChu { get; set; }
     [Column("producer")] public string? Producer { get; set; }
     [Column("ip_address")] public string? IpAddress { get; set; }
-    // Lấy từ GLPI khi đồng bộ (dùng làm giá trị mặc định cho phiếu bàn giao): tên hệ điều hành và bản Office.
     [Column("os_name")] public string? OsName { get; set; }
     [Column("office_name")] public string? OfficeName { get; set; }
-    /// <summary>Số điện thoại của SIM đang gắn trong máy (điện thoại) — in ở ô Mobile phone number của phiếu bàn giao.</summary>
     [Column("phone_number")] public string? PhoneNumber { get; set; }
-    /// <summary>Số serial (ICCID) của SIM.</summary>
     [Column("sim_serial")] public string? SimSerial { get; set; }
-    // Khoá liên kết ổn định tới tài sản GLPI (id trong GLPI + loại nguồn "laptop"/"phone"/"tablet"/"monitor"): đồng bộ
-    // khớp theo cặp này trước, chỉ dò theo số serial (Ma) cho thiết bị CHƯA từng gắn — để sửa seri bên GLPI (gõ nhầm,
-    // cập nhật lại) không bị hiểu nhầm thành tài sản mới rồi tạo trùng bản ghi.
     [Column("glpi_id")] public int? GlpiId { get; set; }
     [Column("glpi_type")] public string? GlpiType { get; set; }
     [Column("created_at")] public DateTime CreatedAt { get; set; }
@@ -59,9 +52,7 @@ public sealed class PrintHistory
 {
     public int Id { get; set; }
     [Column("device_id")] public int DeviceId { get; set; }
-    // Không còn khoá ngoại tới users (xoá tài khoản không được chặn bởi lịch sử in tem) — chỉ giữ id để tham khảo.
     [Column("user_id")] public int UserId { get; set; }
-    /// <summary>Tên người in, chụp lại ngay lúc in — giữ nguyên dù tài khoản đó sau này bị xoá.</summary>
     [Column("printed_by_name")] public string PrintedByName { get; set; } = "";
     [Column("printed_at")] public DateTime PrintedAt { get; set; }
     public Device Device { get; set; } = null!;
@@ -72,9 +63,7 @@ public sealed class DeviceHistory
 {
     public int Id { get; set; }
     [Column("device_id")] public int DeviceId { get; set; }
-    // Không còn khoá ngoại tới users (xoá tài khoản không được chặn bởi lịch sử sửa thiết bị) — chỉ giữ id để tham khảo.
     [Column("user_id")] public int UserId { get; set; }
-    /// <summary>Tên người sửa, chụp lại ngay lúc sửa — giữ nguyên dù tài khoản đó sau này bị xoá.</summary>
     [Column("changed_by_name")] public string ChangedByName { get; set; } = "";
     [Column("field_name")] public string FieldName { get; set; } = "";
     [Column("old_value")] public string? OldValue { get; set; }
@@ -83,24 +72,18 @@ public sealed class DeviceHistory
     public Device Device { get; set; } = null!;
 }
 
-// Cấp cho người/hệ thống ngoài gọi 1 số API nhất định mà không cần tài khoản đăng nhập đầy đủ (xem ApiKeyScope.PathPrefixes
-// trong Program.cs) — mỗi key chỉ mở khoá đúng những API thuộc các "scope" đã gắn, không có quyền gì khác ngoài đó.
 [Table("api_keys")]
 public sealed class ApiKey
 {
     public int Id { get; set; }
     [Column("name")] public string Name { get; set; } = "";
-    /// <summary>Băm SHA-256 (dạng hex) của key thật — key gốc chỉ hiện ĐÚNG 1 LẦN lúc tạo, không lưu lại để tra cứu.</summary>
     [Column("key_hash")] public string KeyHash { get; set; } = "";
-    /// <summary>Danh sách quyền, cách nhau bởi dấu phẩy (vd "qr") — khớp với ApiKeyScope.PathPrefixes.</summary>
     [Column("scopes")] public string Scopes { get; set; } = "";
     [Column("created_by_name")] public string? CreatedByName { get; set; }
     [Column("created_at")] public DateTime CreatedAt { get; set; }
     [Column("last_used_at")] public DateTime? LastUsedAt { get; set; }
 }
 
-// Cho mượn thiết bị IT tạm thời (khác Handover — bàn giao lâu dài/vĩnh viễn): có hạn trả và ngày trả thực tế, kèm
-// chữ ký vẽ tay của người mượn chụp lại NGAY lúc mượn (Signature không đổi sau khi đã lưu).
 [Table("device_loans")]
 public sealed class DeviceLoan
 {
@@ -113,12 +96,9 @@ public sealed class DeviceLoan
     [Column("borrowed_at")] public DateTime BorrowedAt { get; set; }
     [Column("due_at")] public DateTime? DueAt { get; set; }
     [Column("returned_at")] public DateTime? ReturnedAt { get; set; }
-    /// <summary>JSON tự do: {"devices":[{id,ma,ten,loai,model}],"notes":"..."} — giống Payload của Handover.</summary>
     [Column("payload")] public string? Payload { get; set; }
-    /// <summary>Chữ ký vẽ bằng chuột/ngón tay lúc mượn, dạng data URL PNG (base64) — ảnh chụp tại thời điểm mượn, không sửa lại sau.</summary>
     [Column("signature")] public string? Signature { get; set; }
     [Column("user_id")] public int UserId { get; set; }
-    /// <summary>Tên người lập phiếu, chụp lại ngay lúc lập — giữ nguyên dù tài khoản đó sau này bị xoá.</summary>
     [Column("created_by_name")] public string? CreatedByName { get; set; }
     [Column("created_at")] public DateTime CreatedAt { get; set; }
 }
@@ -128,15 +108,12 @@ public sealed class Handover
 {
     public int Id { get; set; }
     [Column("no")] public string No { get; set; } = "";
-    /// <summary>"computer" hoặc "mobile" (điện thoại/tablet) — 2 dãy số riêng, được phép trùng NHAU giữa 2 nhóm (chỉ
-    /// không được trùng trong CÙNG 1 nhóm, xem khoá duy nhất gộp (no, kind) trong WareHubDbContext).</summary>
     [Column("kind")] public string Kind { get; set; } = "computer";
     [Column("device_id")] public int? DeviceId { get; set; }
     [Column("device_ma")] public string? DeviceMa { get; set; }
     [Column("full_name")] public string? FullName { get; set; }
     [Column("payload")] public string? Payload { get; set; }
     [Column("user_id")] public int UserId { get; set; }
-    /// <summary>Tên người tạo phiếu, chụp lại ngay lúc tạo — giữ nguyên dù tài khoản đó sau này bị xoá.</summary>
     [Column("created_by_name")] public string? CreatedByName { get; set; }
     [Column("created_at")] public DateTime CreatedAt { get; set; }
 }
