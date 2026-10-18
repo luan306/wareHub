@@ -452,12 +452,9 @@ users.MapGet("/", async (WareHubDbContext db) => Results.Ok(new
 }));
 users.MapGet("/ldap-search", async (string? q, LdapService ldap, WareHubDbContext db, CancellationToken ct) =>
 {
-    var query = q?.Trim();
-    if (query?.Length == 1) return Results.BadRequest(new { error = "Nhập ít nhất 2 ký tự để tìm" });
-    if (!ldap.IsConfigured) return Results.BadRequest(new { error = "Chưa cấu hình kết nối LDAP (mục \"Ldap\" trong cấu hình)." });
-    List<LdapUserMatch> matches;
-    try { matches = await ldap.SearchUsersAsync(query, ct); }
-    catch (Exception ex) when (ex is LdapException or InvalidOperationException) { return Results.BadRequest(new { error = $"Không kết nối được LDAP: {ex.Message}" }); }
+    var (searchResult, error) = await SearchLdapAsync(q, ldap, ct);
+    if (error is not null) return error;
+    var matches = searchResult!;
     var candidateUsernames = matches.Select(m => m.Username).ToList();
     var existing = candidateUsernames.Count == 0 ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         : (await db.Users.Where(x => candidateUsernames.Contains(x.Username)).Select(x => x.Username).ToListAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -558,6 +555,17 @@ print.MapGet("/history", async (string? from, string? to, string? search, int? p
 });
 
 var handovers = app.MapGroup("/api/handovers").RequireAuthorization();
+handovers.MapGet("/ldap-search", async (string? q, LdapService ldap, CancellationToken ct) =>
+{
+    var (searchResult, error) = await SearchLdapAsync(q, ldap, ct);
+    if (error is not null) return error;
+    var matches = searchResult!;
+    return Results.Ok(new
+    {
+        results = matches.Select(m => new { username = m.Username, full_name = m.FullName, email = m.Email, department = m.Department, employee_id = m.EmployeeId }),
+        truncated = matches.Count >= LdapService.MaxResults,
+    });
+});
 handovers.MapGet("/next-no", async (DateOnly? date, WareHubDbContext db) =>
 {
     var day = date ?? DateOnly.FromDateTime(DateTime.Today);
@@ -665,12 +673,9 @@ handovers.MapDelete("/{id:int}", async (int id, WareHubDbContext db) =>
 var loans = app.MapGroup("/api/loans").RequireAuthorization();
 loans.MapGet("/ldap-search", async (string? q, LdapService ldap, WareHubDbContext db, CancellationToken ct) =>
 {
-    var query = q?.Trim();
-    if (query?.Length == 1) return Results.BadRequest(new { error = "Nhập ít nhất 2 ký tự để tìm" });
-    if (!ldap.IsConfigured) return Results.BadRequest(new { error = "Chưa cấu hình kết nối LDAP (mục \"Ldap\" trong cấu hình)." });
-    List<LdapUserMatch> matches;
-    try { matches = await ldap.SearchUsersAsync(query, ct); }
-    catch (Exception ex) when (ex is LdapException or InvalidOperationException) { return Results.BadRequest(new { error = $"Không kết nối được LDAP: {ex.Message}" }); }
+    var (searchResult, error) = await SearchLdapAsync(q, ldap, ct);
+    if (error is not null) return error;
+    var matches = searchResult!;
     var employeeIds = matches.Where(m => !string.IsNullOrWhiteSpace(m.EmployeeId)).Select(m => m.EmployeeId!).Distinct().ToList();
     var costCenters = employeeIds.Count == 0 ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         : await db.EmployeeCostCenters.AsNoTracking().Where(x => employeeIds.Contains(x.EmployeeId))
@@ -954,6 +959,14 @@ static void CopyDevice(Device target, DeviceRequest request)
     target.SimSerial = NullIfBlank(request.SimSerial);
 }
 static string? Truncate(string? value, int max) => string.IsNullOrWhiteSpace(value) ? null : (value.Length > max ? value[..max] : value);
+static async Task<(List<LdapUserMatch>? Matches, IResult? Error)> SearchLdapAsync(string? q, LdapService ldap, CancellationToken ct)
+{
+    var query = q?.Trim();
+    if (query?.Length == 1) return (null, Results.BadRequest(new { error = "Nhập ít nhất 2 ký tự để tìm" }));
+    if (!ldap.IsConfigured) return (null, Results.BadRequest(new { error = "Chưa cấu hình kết nối LDAP (mục \"Ldap\" trong cấu hình)." }));
+    try { return (await ldap.SearchUsersAsync(query, ct), null); }
+    catch (Exception ex) when (ex is LdapException or InvalidOperationException) { return (null, Results.BadRequest(new { error = $"Không kết nối được LDAP: {ex.Message}" })); }
+}
 static Dictionary<string, string?> SnapshotDevice(Device device) => new()
 {
     ["ma"] = device.Ma,

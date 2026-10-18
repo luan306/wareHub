@@ -5,6 +5,7 @@ import { printHandoverSheets } from '../utils/printPageSize';
 import { LOAI_LABELS, LOAI_LABELS_EN } from '../utils/deviceTypes';
 import { useT } from '../i18n';
 import { useAuth } from '../context/AuthContext';
+import { LdapAutocompleteField } from './LdapAutocompleteField';
 import smcLogo from '../img/Logo_SMC_Corporation.svg';
 
 export function buildLoanData() {
@@ -276,66 +277,6 @@ function LoanDevicePicker({ excludeIds, onPick, onCancel }) {
   );
 }
 
-function LdapAutocompleteField({ value, disabled, onChange, onSelect }) {
-  const { t } = useT();
-  const [open, setOpen] = useState(false);
-  const [results, setResults] = useState(null);
-  const [error, setError] = useState('');
-  const boxRef = useRef(null);
-  const valueRef = useRef(value);
-  valueRef.current = value;
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const query = valueRef.current.trim();
-    if (query.length < 2) { setResults(null); setError(''); return undefined; }
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      api.get('/loans/ldap-search', { q: query })
-        .then((res) => { if (!cancelled) { setResults(res.results); setError(''); } })
-        .catch((err) => { if (!cancelled) setError(err.message); });
-    }, 300);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [value, open]);
-
-  useEffect(() => {
-    function onOutside(event) { if (boxRef.current && !boxRef.current.contains(event.target)) setOpen(false); }
-    document.addEventListener('mousedown', onOutside);
-    return () => document.removeEventListener('mousedown', onOutside);
-  }, []);
-
-  return (
-    <div className="loan-borrower-field" ref={boxRef}>
-      <input
-        className="form-control"
-        value={value}
-        disabled={disabled}
-        autoComplete="off"
-        onFocus={() => setOpen(true)}
-        onChange={(event) => { onChange(event.target.value); setOpen(true); }}
-      />
-      {open && value.trim().length >= 2 && (
-        <div className="loan-borrower-suggest">
-          {error && <div className="hv-error">{error}</div>}
-          {!error && results === null && <div className="loan-borrower-suggest-empty">{t('common.loading')}</div>}
-          {!error && results && results.length === 0 && <div className="loan-borrower-suggest-empty">{t('loan.ldapEmpty')}</div>}
-          {results && results.map((match) => (
-            <button
-              type="button"
-              key={match.username}
-              className="loan-borrower-suggest-row"
-              onClick={() => { onSelect(match); setOpen(false); }}
-            >
-              <b>{match.full_name}</b>
-              <small>{[match.employee_id, match.username, match.department].filter(Boolean).join(' · ')}</small>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function LoanModal({ saved, onClose }) {
   const { t } = useT();
   const { user } = useAuth();
@@ -465,6 +406,8 @@ export function LoanModal({ saved, onClose }) {
                     <LdapAutocompleteField
                       value={data.employee_id}
                       disabled={!editableFields}
+                      searchPath="/loans/ldap-search"
+                      emptyText={t('loan.ldapEmpty')}
                       onChange={(value) => updateField('employee_id', value)}
                       onSelect={handleLdapPick}
                     />
@@ -474,6 +417,8 @@ export function LoanModal({ saved, onClose }) {
                     <LdapAutocompleteField
                       value={data.borrower_name}
                       disabled={!editableFields}
+                      searchPath="/loans/ldap-search"
+                      emptyText={t('loan.ldapEmpty')}
                       onChange={(value) => updateField('borrower_name', value)}
                       onSelect={handleLdapPick}
                     />

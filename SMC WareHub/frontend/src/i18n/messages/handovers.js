@@ -38,6 +38,8 @@ export const handovers = {
   'hv.f.full_name': ['Họ tên', 'Full name'],
   'hv.f.employee_id': ['Mã số nhân viên', 'Employee ID'],
   'hv.f.department': ['Nhà máy / Bộ phận', 'Factory / Department'],
+  'hv.ldapEmpty': ['Không tìm thấy trong danh bạ (AD)', 'No match in the directory (AD)'],
+  'hv.ldapPicked': ['Đã chọn {name} từ danh bạ AD.', 'Picked {name} from the AD directory.'],
   'hv.noField': ['Số phiếu (No.) — tự cấp hoặc tự nhập', 'Slip no. — auto-assigned or type your own'],
   'hv.noIssued': ['Đã có số phiếu này.', 'This slip number is already issued.'],
   'hv.noPending': ['Số dự kiến, cấp chính thức khi bấm Lưu hoặc In phiếu.', 'Expected number; issued for real when you click Save or Print.'],

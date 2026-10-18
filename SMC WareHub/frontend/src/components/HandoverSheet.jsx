@@ -5,6 +5,7 @@ import { printHandoverSheets } from '../utils/printPageSize';
 import { LOAI_LABELS, LOAI_LABELS_EN } from '../utils/deviceTypes';
 import { isoToday } from '../utils/date';
 import { useT } from '../i18n';
+import { LdapAutocompleteField } from './LdapAutocompleteField';
 import smcLogo from '../img/Logo_SMC_Corporation.svg';
 
 const FORM_CODE = 'ITFGE-00459_19_A';
@@ -670,6 +671,16 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
     setPickerOpen(false);
   }
 
+  function handleLdapPick(match) {
+    setData((current) => ({
+      ...current,
+      full_name: match.full_name,
+      employee_id: match.employee_id || current.employee_id,
+      department: current.department || match.department || current.department,
+    }));
+    setNotice(t('hv.ldapPicked', { name: match.full_name }));
+  }
+
   function handleMonitorPick(monitor) {
     const label = `${monitor.model || monitor.ten} (S/N: ${monitor.ma})`;
     setData((current) => {
@@ -735,6 +746,14 @@ export function HandoverModal({ device, saved, extraAttachments, onClose }) {
                           <select className="form-control" value={data[key]} onChange={(event) => updateField(key, event.target.value)}>
                             {(data[key] && !options.includes(data[key]) ? [data[key], ...options] : options).map((option) => <option key={option} value={option}>{option}</option>)}
                           </select>
+                        ) : key === 'full_name' || key === 'employee_id' ? (
+                          <LdapAutocompleteField
+                            value={data[key]}
+                            searchPath="/handovers/ldap-search"
+                            emptyText={t('hv.ldapEmpty')}
+                            onChange={(value) => updateField(key, value)}
+                            onSelect={handleLdapPick}
+                          />
                         ) : (
                           <input
                             className="form-control"

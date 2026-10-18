@@ -49,7 +49,7 @@ public sealed class LdapService(IOptions<LdapOptions> options, ILogger<LdapServi
             var givenName = entry.Attributes["givenName"]?.Count > 0 ? entry.Attributes["givenName"][0]?.ToString() : null;
             var surname = entry.Attributes["sn"]?.Count > 0 ? entry.Attributes["sn"][0]?.ToString() : null;
             var fullName = !string.IsNullOrWhiteSpace(givenName) && !string.IsNullOrWhiteSpace(surname)
-                ? $"{givenName} {surname}"
+                ? $"{surname} {givenName}"
                 : entry.Attributes["cn"]?[0]?.ToString();
             var email = entry.Attributes["mail"]?.Count > 0 ? entry.Attributes["mail"][0]?.ToString() : null;
             var department = entry.Attributes["department"]?.Count > 0 ? entry.Attributes["department"][0]?.ToString() : null;
