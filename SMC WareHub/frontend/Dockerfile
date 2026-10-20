@@ -1,7 +1,6 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package*.json ./
-# npm ci: cài đúng phiên bản trong package-lock.json (không tự nâng phiên bản), lặp lại được và không kéo gói lạ.
 RUN npm ci
 COPY . .
 RUN npm run build

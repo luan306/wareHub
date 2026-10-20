@@ -13,6 +13,13 @@ x-backend: &backend
     DefaultAdmin__FullName: ${DEFAULT_ADMIN_FULLNAME:-Quan tri vien}
     Cors__Origins__0: ${CORS_ORIGIN:-http://localhost}
     Maintenance__FlagFile: /data/maintenance.json
+    Ldap__Host: ${LDAP_HOST:-}
+    Ldap__Port: ${LDAP_PORT:-389}
+    Ldap__UseSsl: ${LDAP_USE_SSL:-false}
+    Ldap__BaseDn: ${LDAP_BASE_DN:-}
+    Ldap__BindUsername: ${LDAP_BIND_USERNAME:-}
+    Ldap__BindPassword: ${LDAP_BIND_PASSWORD:-}
+    Ldap__UserPrincipalSuffix: ${LDAP_USER_SUFFIX:-}
   volumes:
     - shared_data:/data
   depends_on:

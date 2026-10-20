@@ -1,6 +1,3 @@
-# Chạy nhanh trên 1 máy (không blue-green). Các giá trị bí mật BẮT BUỘC đặt trong file .env cùng thư mục (không có giá trị mặc định
-# yếu): thiếu thì docker compose báo lỗi ngay thay vì chạy với mật khẩu ai cũng đoán được.
-# Chỉ cổng 80 (web) được mở ra ngoài; MySQL và backend chỉ nói chuyện với nhau trong mạng nội bộ của Docker.
 services:
   mysql:
     image: mysql:8.0
@@ -30,8 +27,6 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-    # Không có "ports": backend chỉ nhận yêu cầu từ container frontend (nginx). Mở cổng này ra ngoài sẽ cho người ngoài
-    # đi vòng qua nginx và tự đặt X-Forwarded-For để lẩn tránh việc khoá đăng nhập theo IP.
 
   frontend:
     build: ./frontend

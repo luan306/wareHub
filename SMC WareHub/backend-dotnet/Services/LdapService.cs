@@ -32,8 +32,7 @@ public sealed class LdapService(IOptions<LdapOptions> options, ILogger<LdapServi
         if (!IsConfigured) throw new InvalidOperationException("Chưa cấu hình kết nối LDAP (mục \"Ldap\" trong cấu hình).");
         ct.ThrowIfCancellationRequested();
         using var connection = Connect();
-        connection.Credential = new NetworkCredential(_options.BindUsername, _options.BindPassword);
-        connection.Bind();
+        connection.Bind(new NetworkCredential(_options.BindUsername, _options.BindPassword));
 
         var filter = string.IsNullOrWhiteSpace(query)
             ? "(&(objectCategory=person)(objectClass=user))"
@@ -74,8 +73,7 @@ public sealed class LdapService(IOptions<LdapOptions> options, ILogger<LdapServi
         try
         {
             using var connection = Connect();
-            connection.Credential = new NetworkCredential(upn, password);
-            connection.Bind();
+            connection.Bind(new NetworkCredential(upn, password));
             return true;
         }
         catch (LdapException ex)
