@@ -965,7 +965,7 @@ static async Task<(List<LdapUserMatch>? Matches, IResult? Error)> SearchLdapAsyn
     if (query?.Length == 1) return (null, Results.BadRequest(new { error = "Nhập ít nhất 2 ký tự để tìm" }));
     if (!ldap.IsConfigured) return (null, Results.BadRequest(new { error = "Chưa cấu hình kết nối LDAP (mục \"Ldap\" trong cấu hình)." }));
     try { return (await ldap.SearchUsersAsync(query, ct), null); }
-    catch (Exception ex) when (ex is LdapException or InvalidOperationException) { return (null, Results.BadRequest(new { error = $"Không kết nối được LDAP: {ex.Message}" })); }
+    catch (Exception ex) when (ex is DirectoryException or InvalidOperationException) { return (null, Results.BadRequest(new { error = $"Không kết nối được LDAP: {ex.Message}" })); }
 }
 static Dictionary<string, string?> SnapshotDevice(Device device) => new()
 {

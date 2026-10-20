@@ -45,17 +45,24 @@ public sealed class LdapService(IOptions<LdapOptions> options, ILogger<LdapServi
         var results = new List<LdapUserMatch>();
         foreach (SearchResultEntry entry in response.Entries)
         {
-            var username = entry.Attributes["sAMAccountName"]?[0]?.ToString();
-            var givenName = entry.Attributes["givenName"]?.Count > 0 ? entry.Attributes["givenName"][0]?.ToString() : null;
-            var surname = entry.Attributes["sn"]?.Count > 0 ? entry.Attributes["sn"][0]?.ToString() : null;
-            var fullName = !string.IsNullOrWhiteSpace(givenName) && !string.IsNullOrWhiteSpace(surname)
-                ? $"{surname} {givenName}"
-                : entry.Attributes["cn"]?[0]?.ToString();
-            var email = entry.Attributes["mail"]?.Count > 0 ? entry.Attributes["mail"][0]?.ToString() : null;
-            var department = entry.Attributes["department"]?.Count > 0 ? entry.Attributes["department"][0]?.ToString() : null;
-            var employeeId = entry.Attributes["employeeNumber"]?.Count > 0 ? entry.Attributes["employeeNumber"][0]?.ToString() : null;
-            if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(fullName))
-                results.Add(new LdapUserMatch(username, fullName, email, department, employeeId));
+            try
+            {
+                var username = AttributeValue(entry, "sAMAccountName");
+                var givenName = AttributeValue(entry, "givenName");
+                var surname = AttributeValue(entry, "sn");
+                var fullName = !string.IsNullOrWhiteSpace(givenName) && !string.IsNullOrWhiteSpace(surname)
+                    ? $"{surname} {givenName}"
+                    : AttributeValue(entry, "cn");
+                var email = AttributeValue(entry, "mail");
+                var department = AttributeValue(entry, "department");
+                var employeeId = AttributeValue(entry, "employeeNumber");
+                if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(fullName))
+                    results.Add(new LdapUserMatch(username, fullName, email, department, employeeId));
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Bỏ qua 1 bản ghi AD đọc lỗi khi tìm LDAP (DN: {Dn})", entry.DistinguishedName);
+            }
         }
         return results.Take(MaxResults).ToList();
     }, ct);
@@ -77,6 +84,9 @@ public sealed class LdapService(IOptions<LdapOptions> options, ILogger<LdapServi
             return false;
         }
     }, ct);
+
+    private static string? AttributeValue(SearchResultEntry entry, string name) =>
+        entry.Attributes[name]?.Count > 0 ? entry.Attributes[name][0]?.ToString() : null;
 
     private static string EscapeFilter(string value) =>
         value.Replace("\\", "\\5c").Replace("*", "\\2a").Replace("(", "\\28").Replace(")", "\\29").Replace("\0", "\\00");
