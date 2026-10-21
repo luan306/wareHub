@@ -21,23 +21,48 @@ public sealed class LdapService(IOptions<LdapOptions> options, ILogger<LdapServi
             Timeout = TimeSpan.FromSeconds(10),
         };
         connection.SessionOptions.ProtocolVersion = 3;
+        connection.SessionOptions.ReferralChasing = ReferralChasingOptions.None;
         if (_options.UseSsl) connection.SessionOptions.SecureSocketLayer = true;
         return connection;
     }
 
     public const int MaxResults = 500;
 
+    private static readonly string[] RichAttributes = ["cn", "sAMAccountName", "mail", "department", "employeeNumber", "givenName", "sn"];
+    private static readonly string[] BasicAttributes = ["cn", "sAMAccountName", "mail", "department"];
+
     public Task<List<LdapUserMatch>> SearchUsersAsync(string? query, CancellationToken ct) => Task.Run(() =>
     {
         if (!IsConfigured) throw new InvalidOperationException("Chưa cấu hình kết nối LDAP (mục \"Ldap\" trong cấu hình).");
         ct.ThrowIfCancellationRequested();
+
+        var richFilter = BuildFilter(query, includeEmployeeNumber: true);
+        try
+        {
+            return RunSearch(richFilter, RichAttributes, ct);
+        }
+        catch (Exception ex) when (ex is DirectoryException or TimeoutException)
+        {
+            logger.LogWarning(ex, "Tìm LDAP đầy đủ (kèm MSNV) lỗi, thử lại kiểu rút gọn (chỉ tên/tài khoản)");
+            var basicFilter = BuildFilter(query, includeEmployeeNumber: false);
+            return RunSearch(basicFilter, BasicAttributes, ct);
+        }
+    }, ct);
+
+    private static string BuildFilter(string? query, bool includeEmployeeNumber)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return "(&(objectCategory=person)(objectClass=user))";
+        var escaped = EscapeFilter(query);
+        var employeeNumberClause = includeEmployeeNumber ? $"(employeeNumber=*{escaped}*)" : "";
+        return $"(&(objectCategory=person)(objectClass=user)(|(cn=*{escaped}*)(sAMAccountName=*{escaped}*){employeeNumberClause}))";
+    }
+
+    private List<LdapUserMatch> RunSearch(string filter, string[] attributes, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
         using var connection = Connect();
         connection.Bind(new NetworkCredential(_options.BindUsername, _options.BindPassword));
-
-        var filter = string.IsNullOrWhiteSpace(query)
-            ? "(&(objectCategory=person)(objectClass=user))"
-            : $"(&(objectCategory=person)(objectClass=user)(|(cn=*{EscapeFilter(query)}*)(sAMAccountName=*{EscapeFilter(query)}*)(employeeNumber=*{EscapeFilter(query)}*)))";
-        var request = new SearchRequest(_options.BaseDn, filter, SearchScope.Subtree, "cn", "sAMAccountName", "mail", "department", "employeeNumber", "givenName", "sn");
+        var request = new SearchRequest(_options.BaseDn, filter, SearchScope.Subtree, attributes);
         request.SizeLimit = MaxResults;
         var response = (SearchResponse)connection.SendRequest(request);
 
@@ -64,11 +89,12 @@ public sealed class LdapService(IOptions<LdapOptions> options, ILogger<LdapServi
             }
         }
         return results.Take(MaxResults).ToList();
-    }, ct);
+    }
 
     public Task<bool> VerifyPasswordAsync(string username, string password, CancellationToken ct) => Task.Run(() =>
     {
         if (!IsConfigured || string.IsNullOrWhiteSpace(password)) return false;
+        ct.ThrowIfCancellationRequested();
         var upn = username.Contains('@') ? username : $"{username}{_options.UserPrincipalSuffix}";
         try
         {
@@ -76,9 +102,9 @@ public sealed class LdapService(IOptions<LdapOptions> options, ILogger<LdapServi
             connection.Bind(new NetworkCredential(upn, password));
             return true;
         }
-        catch (LdapException ex)
+        catch (Exception ex) when (ex is DirectoryException or TimeoutException)
         {
-            logger.LogWarning("LDAP bind thất bại cho {User}: {Message}", username, ex.Message);
+            logger.LogWarning(ex, "LDAP bind thất bại cho {User}: {Message}", username, ex.Message);
             return false;
         }
     }, ct);
