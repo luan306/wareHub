@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using QRCoder;
 using WareHub.Api.Contracts;
@@ -786,6 +787,39 @@ loans.MapDelete("/{id:int}", async (int id, WareHubDbContext db) =>
     return Results.Ok(new { ok = true });
 }).RequireAuthorization("admin");
 
+app.MapGet("/api/diagnostics/ldap", async (LdapService ldap, IOptions<LdapOptions> ldapOptions, CancellationToken ct) =>
+{
+    var opts = ldapOptions.Value;
+    object protocolsResult;
+    try
+    {
+        var matches = await ldap.SearchUsersAsync("a", ct);
+        protocolsResult = new { ok = true, count = matches.Count };
+    }
+    catch (Exception ex)
+    {
+        protocolsResult = new { ok = false, exceptionType = ex.GetType().FullName, message = ex.Message };
+    }
+
+    object adsiResult;
+    try
+    {
+#pragma warning disable CA1416
+        using var de = new System.DirectoryServices.DirectoryEntry($"LDAP://{opts.Host}:{opts.Port}/{opts.BaseDn}", opts.BindUsername, opts.BindPassword);
+        using var searcher = new System.DirectoryServices.DirectorySearcher(de) { Filter = "(sAMAccountName=*a*)" };
+        searcher.PropertiesToLoad.Add("sAMAccountName");
+        var result = searcher.FindOne();
+#pragma warning restore CA1416
+        adsiResult = new { ok = true, found = result is not null };
+    }
+    catch (Exception ex)
+    {
+        adsiResult = new { ok = false, exceptionType = ex.GetType().FullName, message = ex.Message };
+    }
+
+    return Results.Ok(new { protocols = protocolsResult, adsi = adsiResult });
+}).RequireAuthorization("admin");
+
 var employees = app.MapGroup("/api/employees").RequireAuthorization("admin");
 employees.MapGet("/cost-centers/count", async (WareHubDbContext db) => Results.Ok(new { count = await db.EmployeeCostCenters.CountAsync() }));
 employees.MapPost("/cost-centers/import", async (HttpRequest request, WareHubDbContext db) =>
@@ -1124,7 +1158,8 @@ static void ApplyGlpiAsset(Device device, GlpiAsset asset)
     if (Truncate(asset.Name, 150) is { } name) device.Ten = name;
     device.Model = Truncate(asset.Model?.Name, 150) ?? device.Model;
     device.Producer = Truncate(asset.Manufacturer?.Name, 100) ?? device.Producer;
-    device.UserName = Truncate(asset.User?.Name, 100) ?? device.UserName;
+    var glpiUserName = Truncate(asset.User?.Name, 100);
+    device.UserName = string.Equals(glpiUserName, "instock", StringComparison.OrdinalIgnoreCase) ? null : glpiUserName ?? device.UserName;
     device.PhongBan = Truncate(asset.Location?.Name, 100) ?? device.PhongBan;
     device.GhiChu = Truncate(asset.Comment, 500) ?? device.GhiChu;
 }

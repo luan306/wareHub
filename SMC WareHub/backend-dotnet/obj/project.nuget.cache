@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "puaPsqQJRm8=",
+  "dgSpecHash": "vg2snV8Oggo=",
   "success": true,
   "projectFilePath": "D:\\SMC WareHub\\backend-dotnet\\WareHub.Api.csproj",
   "expectedPackageFiles": [
@@ -44,6 +44,7 @@
     "C:\\Users\\Admin\\.nuget\\packages\\swashbuckle.aspnetcore.swagger\\6.9.0\\swashbuckle.aspnetcore.swagger.6.9.0.nupkg.sha512",
     "C:\\Users\\Admin\\.nuget\\packages\\swashbuckle.aspnetcore.swaggergen\\6.9.0\\swashbuckle.aspnetcore.swaggergen.6.9.0.nupkg.sha512",
     "C:\\Users\\Admin\\.nuget\\packages\\swashbuckle.aspnetcore.swaggerui\\6.9.0\\swashbuckle.aspnetcore.swaggerui.6.9.0.nupkg.sha512",
+    "C:\\Users\\Admin\\.nuget\\packages\\system.directoryservices\\9.0.0\\system.directoryservices.9.0.0.nupkg.sha512",
     "C:\\Users\\Admin\\.nuget\\packages\\system.directoryservices.protocols\\10.0.12\\system.directoryservices.protocols.10.0.12.nupkg.sha512",
     "C:\\Users\\Admin\\.nuget\\packages\\system.identitymodel.tokens.jwt\\7.1.2\\system.identitymodel.tokens.jwt.7.1.2.nupkg.sha512",
     "C:\\Users\\Admin\\.nuget\\packages\\system.io.packaging\\8.0.1\\system.io.packaging.8.0.1.nupkg.sha512"
