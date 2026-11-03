@@ -35,6 +35,11 @@ public sealed class MaintenanceState
                 if (!File.Exists(_path)) { _cached = Off; _stamp = DateTime.MinValue; return _cached; }
                 var stamp = File.GetLastWriteTimeUtc(_path);
                 if (stamp != _stamp) { _cached = Read(); _stamp = stamp; }
+                if (_cached.Enabled && _cached.Until is { } until && until <= DateTimeOffset.Now)
+                {
+                    File.Delete(_path);
+                    _cached = Off; _stamp = DateTime.MinValue;
+                }
                 return _cached;
             }
         }

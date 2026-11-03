@@ -1158,8 +1158,7 @@ static void ApplyGlpiAsset(Device device, GlpiAsset asset)
     if (Truncate(asset.Name, 150) is { } name) device.Ten = name;
     device.Model = Truncate(asset.Model?.Name, 150) ?? device.Model;
     device.Producer = Truncate(asset.Manufacturer?.Name, 100) ?? device.Producer;
-    var glpiUserName = Truncate(asset.User?.Name, 100);
-    device.UserName = string.Equals(glpiUserName, "instock", StringComparison.OrdinalIgnoreCase) ? null : glpiUserName ?? device.UserName;
+    device.UserName = Truncate(asset.User?.Name, 100);
     device.PhongBan = Truncate(asset.Location?.Name, 100) ?? device.PhongBan;
     device.GhiChu = Truncate(asset.Comment, 500) ?? device.GhiChu;
 }
