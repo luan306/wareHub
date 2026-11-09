@@ -1044,7 +1044,7 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
     var (printers, printerError) = printersTask.Result;
 
     var assets = computers.Select(c => (Asset: c, Loai: ComputerLoai(c), Kho: "24"))
-        .Concat(phones.Select(p => (Asset: p, Loai: "phone", Kho: "12")))
+        .Concat(phones.Select(p => (Asset: p, Loai: PhoneLoai(p), Kho: PhoneLoai(p) == "pda" ? "24" : "12")))
         .Concat(tablets.Select(t => (Asset: t, Loai: "tablet", Kho: "24")))
         .Concat(monitors.Select(m => (Asset: m, Loai: "monitor", Kho: "24")))
         .Concat(printers.Select(p => (Asset: p, Loai: "printer", Kho: "24")))
@@ -1116,6 +1116,7 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
             existing.GlpiId = c.Id;
             existing.GlpiType = loai;
             if (loai is "laptop" or "desktop" && existing.Loai is "laptop" or "desktop") existing.Loai = loai;
+            else if (loai is "phone" or "pda" && existing.Loai is "phone" or "pda") existing.Loai = loai;
             ApplyGlpiAsset(existing, c);
             if (ApplyExtras(existing, loai, c.Id)) detailed++;
             var changes = DiffDevice(before, SnapshotDevice(existing));
@@ -1153,6 +1154,8 @@ static async Task<(List<GlpiAsset> Items, string? Error)> TryFetchAsync(Func<Tas
 }
 static string ComputerLoai(GlpiAsset asset) =>
     asset.Type?.Name is { } typeName && typeName.Contains("desktop", StringComparison.OrdinalIgnoreCase) ? "desktop" : "laptop";
+static string PhoneLoai(GlpiAsset asset) =>
+    asset.Type?.Name is { } typeName && typeName.Contains("pda", StringComparison.OrdinalIgnoreCase) ? "pda" : "phone";
 static void ApplyGlpiAsset(Device device, GlpiAsset asset)
 {
     if (Truncate(asset.Name, 150) is { } name) device.Ten = name;
