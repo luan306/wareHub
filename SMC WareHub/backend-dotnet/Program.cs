@@ -1099,6 +1099,7 @@ static async Task RunGlpiSyncAsync(IServiceScopeFactory scopes, int userId, Glpi
 
         Device? existing = existingByGlpiKey.TryGetValue((loai, c.Id), out var byGlpi) ? byGlpi
             : loai is "laptop" or "desktop" && existingByGlpiKey.TryGetValue((loai == "laptop" ? "desktop" : "laptop", c.Id), out var byOtherComputerLoai) ? byOtherComputerLoai
+            : loai is "phone" or "pda" && existingByGlpiKey.TryGetValue((loai == "phone" ? "pda" : "phone", c.Id), out var byOtherPhoneLoai) ? byOtherPhoneLoai
             : existingBySerial.TryGetValue(serial, out var bySerial) && bySerial.GlpiId is null ? bySerial
             : null;
 
