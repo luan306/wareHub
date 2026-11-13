@@ -6,26 +6,12 @@ import { LOAI_LABELS, LOAI_LABELS_EN } from '../utils/deviceTypes';
 import { isoToday } from '../utils/date';
 import { useT } from '../i18n';
 import { LdapAutocompleteField } from './LdapAutocompleteField';
+import { usePrintLabels } from '../context/PrintLabelsContext';
+import { splitLines, parseBoldSegments } from '../utils/printLabels';
 import smcLogo from '../img/Logo_SMC_Corporation.svg';
 
 const FORM_CODE = 'ITFGE-00459_19_A';
 const FORM_CODE_PHONE = 'ITFGE-00459_20_A';
-
-const RESPONSIBILITIES = [
-  'End User must protect devices carefully and avoid losing term.',
-  'Do not take the computer out of company unless it is accepted by the Head of Department.',
-  "End User mustn't change the hardware.",
-  "End User mustn't install any software without permission of IT department.",
-  "End User only using for working of company, don't using for personal purposes.",
-  'When having the strange problem must inform to IT department so that check and repair immediately.',
-  'If there is any equipment malfunction due to personal damages such as broken, falling into the water, etc that may be considered by IT members and can compensate that will depend on the charge of repairing fees.',
-  { bold: 'When End user resigned, they have responsibility to return to IT department all of items above one working day before.' },
-  'Any missing or different components will be fine as their prices in the present.',
-];
-
-const PHONE_RESPONSIBILITIES = RESPONSIBILITIES.filter(
-  (item) => typeof item !== 'string' || !/mustn't (change the hardware|install any software)/.test(item),
-);
 
 function formatDayMonthYear(iso) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
@@ -102,22 +88,27 @@ function Label({ en, vi }) {
   );
 }
 
+function Bold({ text }) {
+  return parseBoldSegments(text).map((segment, index) => (segment.bold ? <b key={index}>{segment.text}</b> : segment.text));
+}
+
 export function HandoverSheet({ data }) {
   const isPhone = data.kind === 'phone';
-  const responsibilities = isPhone ? PHONE_RESPONSIBILITIES : RESPONSIBILITIES;
+  const { label } = usePrintLabels();
+  const responsibilities = splitLines(label(isPhone ? 'handover.policy_responsibilities_phone' : 'handover.policy_responsibilities'));
   return (
     <div className="hv-sheet">
       <div className="hv-head">
         <img src={smcLogo} alt="SMC" />
         <div className="hv-title">
-          <h1>MINUTES OF EQUIPMENT HANDOVER</h1>
-          <p>PHIẾU BÀN GIAO THIẾT BỊ</p>
+          <h1>{label('handover.title_en')}</h1>
+          <p>{label('handover.title_vi')}</p>
         </div>
-        <div className="hv-formno">管理No: {isPhone ? FORM_CODE_PHONE : FORM_CODE}</div>
+        <div className="hv-formno">{label('handover.form_no_label')} {isPhone ? FORM_CODE_PHONE : FORM_CODE}</div>
       </div>
 
       <div className="hv-reg">
-        <span>Register Date <i className="hv-vi-inline">(Ngày lập biên bản)</i>: {data.register_date}</span>
+        <span>{label('handover.register_date_en')} <i className="hv-vi-inline">({label('handover.register_date_vi')})</i>: {data.register_date}</span>
         <span className="hv-no">No.: <b>{data.no}</b></span>
       </div>
 
@@ -125,65 +116,63 @@ export function HandoverSheet({ data }) {
         <colgroup><col style={{ width: '22%' }} /><col style={{ width: '28%' }} /><col style={{ width: '22%' }} /><col style={{ width: '28%' }} /></colgroup>
         <tbody>
           <tr>
-            <th><Label en="Full name:" vi="Họ Tên" /></th>
+            <th><Label en={label('handover.field_full_name_en')} vi={label('handover.field_full_name_vi')} /></th>
             <td className="hv-center">{data.full_name}</td>
-            <th><Label en="Factory / Department:" vi="Nhà máy / Bộ phận" /></th>
+            <th><Label en={label('handover.field_department_en')} vi={label('handover.field_department_vi')} /></th>
             <td className="hv-center">{data.department}</td>
           </tr>
           <tr>
-            <th><Label en="Employee ID:" vi="Mã số nhân viên" /></th>
+            <th><Label en={label('handover.field_employee_id_en')} vi={label('handover.field_employee_id_vi')} /></th>
             <td className="hv-center">{data.employee_id}</td>
-            <th><Label en="Transfer Date:" vi="Ngày giao nhận" /></th>
+            <th><Label en={label('handover.field_transfer_date_en')} vi={label('handover.field_transfer_date_vi')} /></th>
             <td className="hv-center">{formatDayMonthYear(data.transfer_date)}</td>
           </tr>
         </tbody>
       </table>
 
-      <div className="hv-band">DETAILS INFORMATION</div>
+      <div className="hv-band">{label('handover.band_details')}</div>
       <table className="hv-details">
         <colgroup><col style={{ width: '30%' }} /><col style={{ width: '20%' }} /><col style={{ width: '50%' }} /></colgroup>
         <tbody>
-          <tr><th>DEVICE NAME</th><td colSpan="2" className="hv-center">{serviceTagDisplay(data, data.computer_name)}</td></tr>
-          <tr><th>SERIAL NUMBER</th><td colSpan="2" className="hv-center">{serviceTagDisplay(data)}</td></tr>
-          <tr><th>MODEL</th><td colSpan="2" className="hv-center">{serviceTagDisplay(data, data.model)}</td></tr>
-          <tr><th>HDD/SSD</th><td colSpan="2" className="hv-center">{data.storage || 'N/A'}</td></tr>
-          <tr><th>RAM</th><td colSpan="2" className="hv-center">{data.ram || 'N/A'}</td></tr>
-          <tr><th>CPU</th><td colSpan="2" className="hv-center">{data.cpu || 'N/A'}</td></tr>
-          <tr><th>PSU/ADAPTER</th><td colSpan="2" className="hv-center">{data.adapter}</td></tr>
+          <tr><th>{label('handover.row_device_name')}</th><td colSpan="2" className="hv-center">{serviceTagDisplay(data, data.computer_name)}</td></tr>
+          <tr><th>{label('handover.row_serial')}</th><td colSpan="2" className="hv-center">{serviceTagDisplay(data)}</td></tr>
+          <tr><th>{label('handover.row_model')}</th><td colSpan="2" className="hv-center">{serviceTagDisplay(data, data.model)}</td></tr>
+          <tr><th>{label('handover.row_storage')}</th><td colSpan="2" className="hv-center">{data.storage || 'N/A'}</td></tr>
+          <tr><th>{label('handover.row_ram')}</th><td colSpan="2" className="hv-center">{data.ram || 'N/A'}</td></tr>
+          <tr><th>{label('handover.row_cpu')}</th><td colSpan="2" className="hv-center">{data.cpu || 'N/A'}</td></tr>
+          <tr><th>{label('handover.row_adapter')}</th><td colSpan="2" className="hv-center">{data.adapter}</td></tr>
           <tr>
-            <th rowSpan="2">LICENSE</th>
-            <td className="hv-center hv-sub">Windows</td><td className="hv-center">{data.windows}</td>
+            <th rowSpan="2">{label('handover.row_license')}</th>
+            <td className="hv-center hv-sub">{label('handover.row_windows')}</td><td className="hv-center">{data.windows}</td>
           </tr>
-          <tr><td className="hv-center hv-sub">Office</td><td className="hv-center">{data.office}</td></tr>
+          <tr><td className="hv-center hv-sub">{label('handover.row_office')}</td><td className="hv-center">{data.office}</td></tr>
           <tr>
-            <th rowSpan={isPhone ? 4 : 3}>OTHER DEVICE</th>
-            <td className="hv-center hv-sub">Mouse/Keyboard</td><td className="hv-center">{data.peripherals}</td>
+            <th rowSpan={isPhone ? 4 : 3}>{label('handover.row_other_device')}</th>
+            <td className="hv-center hv-sub">{label('handover.row_peripherals')}</td><td className="hv-center">{data.peripherals}</td>
           </tr>
-          <tr><td className="hv-center hv-sub">Monitor</td><td className="hv-center">{monitorDisplay(data)}</td></tr>
-          {isPhone && <tr><td className="hv-center hv-sub">Mobile Phone Number</td><td className="hv-center">{data.phone_number}</td></tr>}
-          <tr><td className="hv-center hv-sub">Others</td><td className="hv-center">{data.other}</td></tr>
+          <tr><td className="hv-center hv-sub">{label('handover.row_monitor')}</td><td className="hv-center">{monitorDisplay(data)}</td></tr>
+          {isPhone && <tr><td className="hv-center hv-sub">{label('handover.row_phone_number')}</td><td className="hv-center">{data.phone_number}</td></tr>}
+          <tr><td className="hv-center hv-sub">{label('handover.row_others')}</td><td className="hv-center">{data.other}</td></tr>
         </tbody>
       </table>
 
-      <div className="hv-band hv-band-gap">ASSET MANAGEMENT POLICY</div>
+      <div className="hv-band hv-band-gap">{label('handover.band_policy')}</div>
       <table className="hv-policy">
         <colgroup><col style={{ width: '13%' }} /><col style={{ width: '87%' }} /></colgroup>
         <tbody>
           <tr>
-            <th>Responsibilities</th>
+            <th>{label('handover.policy_responsibilities_title')}</th>
             <td>
               <ul>
-                {responsibilities.map((item, index) => (
-                  <li key={index}>{typeof item === 'string' ? item : <b>{item.bold}</b>}</li>
-                ))}
+                {responsibilities.map((line, index) => <li key={index}><Bold text={line} /></li>)}
               </ul>
             </td>
           </tr>
           <tr>
-            <th>Procedures</th>
+            <th>{label('handover.policy_procedures_title')}</th>
             <td>
-              IT department create a minutes of computer handover ➔ End User ➔ Head Department ➔ IT
-              <br />(End Users must send the minutes of equipment handover to IT department <b>within 2 days</b>)
+              {label('handover.policy_procedures_line1')}
+              <br /><Bold text={label('handover.policy_procedures_line2')} />
             </td>
           </tr>
         </tbody>
@@ -193,30 +182,30 @@ export function HandoverSheet({ data }) {
         <table>
           <colgroup><col /><col /><col /></colgroup>
           <thead>
-            <tr><th colSpan="3" className="hv-sign-title">HANDOVER'S DEPARTMENT</th></tr>
-            <tr><th>Head Dept's Approval</th><th>Checked by</th><th>Handover</th></tr>
+            <tr><th colSpan="3" className="hv-sign-title">{label('handover.sign_dept_title')}</th></tr>
+            <tr><th>{label('handover.sign_dept_col1')}</th><th>{label('handover.sign_dept_col2')}</th><th>{label('handover.sign_dept_col3')}</th></tr>
           </thead>
           <tbody><tr className="hv-sign-space"><td /><td /><td /></tr></tbody>
         </table>
         <table>
           <colgroup><col /><col /><col /></colgroup>
           <thead>
-            <tr><th colSpan="3" className="hv-sign-title">RECEIVER'S DEPARTMENT</th></tr>
-            <tr><th>Head Dept's Approval</th><th>Checked by</th><th>Receiver</th></tr>
+            <tr><th colSpan="3" className="hv-sign-title">{label('handover.sign_receiver_title')}</th></tr>
+            <tr><th>{label('handover.sign_dept_col1')}</th><th>{label('handover.sign_dept_col2')}</th><th>{label('handover.sign_receiver_col3')}</th></tr>
           </thead>
           <tbody><tr className="hv-sign-space"><td /><td /><td /></tr></tbody>
         </table>
       </div>
 
-      <div className="hv-resigned">For resigned:</div>
+      <div className="hv-resigned">{label('handover.resigned_label')}</div>
       <div className="hv-signs hv-signs-resigned">
         <table>
-          <thead><tr><th className="hv-sign-title">HANDOVER</th></tr></thead>
-          <tbody><tr className="hv-resigned-space"><td><span className="hv-date">Date:</span></td></tr></tbody>
+          <thead><tr><th className="hv-sign-title">{label('handover.resigned_handover_title')}</th></tr></thead>
+          <tbody><tr className="hv-resigned-space"><td><span className="hv-date">{label('handover.resigned_date_label')}</span></td></tr></tbody>
         </table>
         <table>
-          <thead><tr><th className="hv-sign-title">RECEIVER</th></tr></thead>
-          <tbody><tr className="hv-resigned-space"><td><span className="hv-date">Date:</span></td></tr></tbody>
+          <thead><tr><th className="hv-sign-title">{label('handover.resigned_receiver_title')}</th></tr></thead>
+          <tbody><tr className="hv-resigned-space"><td><span className="hv-date">{label('handover.resigned_date_label')}</span></td></tr></tbody>
         </table>
       </div>
     </div>

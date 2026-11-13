@@ -12,6 +12,7 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
     public DbSet<DeviceLoan> DeviceLoans => Set<DeviceLoan>();
     public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
     public DbSet<EmployeeCostCenter> EmployeeCostCenters => Set<EmployeeCostCenter>();
+    public DbSet<PrintLabelOverride> PrintLabelOverrides => Set<PrintLabelOverride>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -103,6 +104,13 @@ public sealed class WareHubDbContext(DbContextOptions<WareHubDbContext> options)
             entity.Property(x => x.FullName).HasMaxLength(100);
             entity.Property(x => x.CostCenter).HasMaxLength(50).IsRequired();
             entity.Property(x => x.ImportedAt).HasDefaultValueSql("CURRENT_TIMESTAMP(6)").ValueGeneratedOnAdd();
+        });
+        modelBuilder.Entity<PrintLabelOverride>(entity =>
+        {
+            entity.HasKey(x => x.LabelKey);
+            entity.Property(x => x.LabelKey).HasMaxLength(100);
+            entity.Property(x => x.Value).HasColumnType("text").IsRequired();
+            entity.Property(x => x.UpdatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP(6)").ValueGeneratedOnAddOrUpdate();
         });
         modelBuilder.Entity<DeviceHistory>(entity =>
         {

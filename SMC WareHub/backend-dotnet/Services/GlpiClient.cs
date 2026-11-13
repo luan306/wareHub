@@ -38,7 +38,7 @@ public sealed class GlpiAsset
     }
 }
 
-public sealed partial class GlpiClient(HttpClient http, IOptions<GlpiOptions> optionsAccessor, ILogger<GlpiClient> logger)
+public sealed partial class GlpiClient(HttpClient http, IOptions<GlpiOptions> optionsAccessor, ILogger<GlpiClient> logger, GlpiTokenCache tokenCache)
 {
     private static readonly JsonSerializerOptions SnakeCaseJson = new()
     {
@@ -47,29 +47,25 @@ public sealed partial class GlpiClient(HttpClient http, IOptions<GlpiOptions> op
     };
 
     private readonly GlpiOptions _options = optionsAccessor.Value;
-    private string? _cachedToken;
-    private DateTimeOffset _tokenExpiresAt = DateTimeOffset.MinValue;
 
     public bool IsConfigured => _options.IsConfigured;
 
-    private readonly SemaphoreSlim _tokenLock = new(1, 1);
-
-    private void InvalidateToken() => _tokenExpiresAt = DateTimeOffset.MinValue;
+    private void InvalidateToken() => tokenCache.ExpiresAt = DateTimeOffset.MinValue;
 
     private async Task<string> GetAccessTokenAsync(CancellationToken ct)
     {
-        if (_cachedToken is not null && DateTimeOffset.UtcNow < _tokenExpiresAt)
-            return _cachedToken;
-        await _tokenLock.WaitAsync(ct);
+        if (tokenCache.Token is not null && DateTimeOffset.UtcNow < tokenCache.ExpiresAt)
+            return tokenCache.Token;
+        await tokenCache.Lock.WaitAsync(ct);
         try
         {
-            if (_cachedToken is not null && DateTimeOffset.UtcNow < _tokenExpiresAt)
-                return _cachedToken;
+            if (tokenCache.Token is not null && DateTimeOffset.UtcNow < tokenCache.ExpiresAt)
+                return tokenCache.Token;
             return await RequestTokenAsync(ct);
         }
         finally
         {
-            _tokenLock.Release();
+            tokenCache.Lock.Release();
         }
     }
 
@@ -100,8 +96,8 @@ public sealed partial class GlpiClient(HttpClient http, IOptions<GlpiOptions> op
             ?? throw new InvalidOperationException("Phản hồi từ GLPI không có access_token");
         var expiresIn = root.TryGetProperty("expires_in", out var expiresEl) ? expiresEl.GetInt32() : 3600;
 
-        _cachedToken = accessToken;
-        _tokenExpiresAt = DateTimeOffset.UtcNow.AddSeconds(Math.Max(expiresIn - 30, 30));
+        tokenCache.Token = accessToken;
+        tokenCache.ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(Math.Max(expiresIn - 30, 30));
         return accessToken;
     }
 

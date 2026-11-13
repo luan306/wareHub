@@ -61,6 +61,7 @@ builder.Services.AddDbContext<WareHubDbContext>(options =>
              .CommandTimeout(30)));
 builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
 builder.Services.Configure<GlpiOptions>(configuration.GetSection(GlpiOptions.SectionName));
+builder.Services.AddSingleton<GlpiTokenCache>();
 builder.Services.AddHttpClient<GlpiClient>();
 builder.Services.Configure<LdapOptions>(configuration.GetSection(LdapOptions.SectionName));
 builder.Services.AddSingleton<LdapService>();
@@ -471,8 +472,8 @@ users.MapPost("/ldap-add", async (LdapAddRequest request, HttpContext context, W
     if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(fullName)) return Results.BadRequest(new { error = "Thiếu tên đăng nhập hoặc họ tên" });
     if (username.Length > 50) return Results.BadRequest(new { error = "Tên đăng nhập không được vượt quá 50 ký tự" });
     if (fullName.Length > 100) return Results.BadRequest(new { error = "Họ tên không được vượt quá 100 ký tự" });
-    if (request.Role is not ("admin" or "staff" or "superadmin")) return Results.BadRequest(new { error = "Vai trò không hợp lệ" });
-    if (request.Role == "superadmin" && ((User)context.Items["CurrentUser"]!).Role != "superadmin") return Results.Forbid();
+    if (!IsValidRole(request.Role)) return Results.BadRequest(new { error = "Vai trò không hợp lệ" });
+    if (RequiresSuperadmin(request.Role) && ((User)context.Items["CurrentUser"]!).Role != "superadmin") return Results.Forbid();
     if (await db.Users.AnyAsync(x => x.Username == username)) return Results.Conflict(new { error = $"Tên đăng nhập \"{username}\" đã tồn tại" });
     var user = new User { Username = username, FullName = fullName, Role = request.Role, AuthSource = "ldap" };
     user.PasswordHash = hasher.HashPassword(user, Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"));
@@ -488,8 +489,8 @@ users.MapPost("/", async (UserCreateRequest request, HttpContext context, WareHu
     if (username.Length > 50) return Results.BadRequest(new { error = "Tên đăng nhập không được vượt quá 50 ký tự" });
     if (fullName.Length > 100) return Results.BadRequest(new { error = "Họ tên không được vượt quá 100 ký tự" });
     if (PasswordPolicy.Validate(request.Password, username) is { } weakPassword) return Results.BadRequest(new { error = weakPassword });
-    if (request.Role is not ("admin" or "staff" or "superadmin")) return Results.BadRequest(new { error = "Vai trò không hợp lệ" });
-    if (request.Role == "superadmin" && ((User)context.Items["CurrentUser"]!).Role != "superadmin") return Results.Forbid();
+    if (!IsValidRole(request.Role)) return Results.BadRequest(new { error = "Vai trò không hợp lệ" });
+    if (RequiresSuperadmin(request.Role) && ((User)context.Items["CurrentUser"]!).Role != "superadmin") return Results.Forbid();
     if (await db.Users.AnyAsync(x => x.Username == username)) return Results.Conflict(new { error = $"Tên đăng nhập \"{username}\" đã tồn tại" });
     var user = new User { Username = username, FullName = fullName, Role = request.Role }; user.PasswordHash = hasher.HashPassword(user, request.Password); db.Users.Add(user); await db.SaveChangesAsync(); AuditUserAction(app.Logger, context, "tạo", user.Username, $"vai trò {user.Role}"); return Results.Created($"/api/users/{user.Id}", new { id = user.Id });
 });
@@ -499,8 +500,7 @@ users.MapPut("/{id:int}", async (int id, UserUpdateRequest request, HttpContext 
     var currentUser = (User)context.Items["CurrentUser"]!;
     if (currentUser.Id == id && ((request.Role is not null && request.Role != user.Role) || request.IsActive == false))
         return Results.BadRequest(new { error = "Không thể tự đổi vai trò hoặc tự khoá chính mình" });
-    var targetIsOrBecomesSuperadmin = user.Role == "superadmin" || request.Role == "superadmin";
-    if (targetIsOrBecomesSuperadmin && currentUser.Role != "superadmin"
+    if (RequiresSuperadmin(request.Role, user.Role) && currentUser.Role != "superadmin"
         && (request.Role is not null || request.IsActive.HasValue || !string.IsNullOrWhiteSpace(request.Password)))
         return Results.Forbid();
     if (request.FullName is not null)
@@ -512,7 +512,7 @@ users.MapPut("/{id:int}", async (int id, UserUpdateRequest request, HttpContext 
     }
     if (request.Role is not null)
     {
-        if (request.Role is not ("admin" or "staff" or "superadmin")) return Results.BadRequest(new { error = "Vai trò không hợp lệ" });
+        if (!IsValidRole(request.Role)) return Results.BadRequest(new { error = "Vai trò không hợp lệ" });
         user.Role = request.Role;
     }
     if (request.IsActive.HasValue) user.IsActive = request.IsActive.Value;
@@ -894,6 +894,64 @@ employees.MapPost("/cost-centers/import", async (HttpRequest request, WareHubDbC
     return Results.Ok(new { imported = deduped.Count, skipped = rows.Count - deduped.Count, numeric_id_rows = numericIdRows });
 });
 
+var printLabels = app.MapGroup("/api/print-labels").RequireAuthorization();
+printLabels.MapGet("/", async (WareHubDbContext db) => Results.Ok(new
+{
+    overrides = await db.PrintLabelOverrides.AsNoTracking().ToDictionaryAsync(x => x.LabelKey, x => x.Value),
+}));
+printLabels.MapPut("/", async (Dictionary<string, string?> overrides, WareHubDbContext db) =>
+{
+    await UpsertPrintLabelOverridesAsync(db, overrides);
+    return Results.Ok(new { ok = true });
+}).RequireAuthorization("admin");
+printLabels.MapPost("/import", async (HttpRequest request, WareHubDbContext db) =>
+{
+    request.HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>()!.MaxRequestBodySize = 8_388_608;
+    if (!request.HasFormContentType) return Results.BadRequest(new { error = "Thiếu file" });
+    var form = await request.ReadFormAsync();
+    var file = form.Files.GetFile("file");
+    if (file is null || file.Length == 0) return Results.BadRequest(new { error = "Thiếu file" });
+    if (file.Length > 8_388_608) return Results.BadRequest(new { error = "File quá lớn (tối đa 8MB)" });
+    if (!file.FileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+        return Results.BadRequest(new { error = "Chỉ nhận file .xlsx" });
+
+    Dictionary<string, string?> overrides;
+    try
+    {
+        using var stream = file.OpenReadStream();
+        using var workbook = new XLWorkbook(stream);
+        if (!workbook.Worksheets.Any()) return Results.BadRequest(new { error = "File không có sheet nào" });
+        var sheet = workbook.Worksheets.First();
+        var headerRow = sheet.FirstRowUsed();
+        if (headerRow is null) return Results.BadRequest(new { error = "File rỗng" });
+        int? keyCol = null, valueCol = null;
+        foreach (var cell in headerRow.CellsUsed())
+        {
+            var header = cell.GetString().Trim().ToLowerInvariant().Replace(" ", "");
+            if (header is "key" or "makey" or "khoa") keyCol = cell.Address.ColumnNumber;
+            else if (header is "value" or "giatri" or "noidung") valueCol = cell.Address.ColumnNumber;
+        }
+        if (keyCol is null || valueCol is null)
+            return Results.BadRequest(new { error = "Thiếu cột Key hoặc Value trong file (dòng đầu phải có tiêu đề cột)" });
+
+        overrides = new(StringComparer.Ordinal);
+        foreach (var row in sheet.RowsUsed().Skip(1))
+        {
+            var key = row.Cell(keyCol.Value).GetString().Trim();
+            if (string.IsNullOrWhiteSpace(key)) continue;
+            overrides[key] = row.Cell(valueCol.Value).GetString();
+        }
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = $"Không đọc được file Excel: {ex.Message}" });
+    }
+    if (overrides.Count == 0) return Results.BadRequest(new { error = "Không có dòng dữ liệu hợp lệ trong file" });
+
+    await UpsertPrintLabelOverridesAsync(db, overrides);
+    return Results.Ok(new { imported = overrides.Count });
+}).RequireAuthorization("admin");
+
 var qr = app.MapGroup("/api/qr").RequireAuthorization();
 qr.MapGet("/devices/{deviceId:int}", async (int deviceId, int? size, WareHubDbContext db) =>
 {
@@ -942,6 +1000,9 @@ static bool IsMaintenanceExempt(HttpRequest request) =>
     || (HttpMethods.IsGet(request.Method) && request.Path.Equals("/api/maintenance", StringComparison.OrdinalIgnoreCase))
     || (HttpMethods.IsPost(request.Method) && request.Path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase));
 static bool IsMaintenanceExemptRole(string? role) => role is "admin" or "superadmin";
+static bool IsValidRole(string? role) => role is "admin" or "staff" or "superadmin";
+static bool RequiresSuperadmin(string? requestedRole, string? currentRole = null) =>
+    requestedRole == "superadmin" || currentRole == "superadmin";
 
 static string? ValidateDevice(DeviceRequest request)
 {
@@ -1287,6 +1348,7 @@ static async Task EnsureSchemaAsync(WareHubDbContext db)
     await EnsureDeviceLoanTableAsync(db);
     await EnsureIndexAsync(db, "device_loans", "IX_device_loans_CreatedAt", "`created_at`");
     await EnsureEmployeeCostCenterTableAsync(db);
+    await EnsurePrintLabelOverrideTableAsync(db);
     await db.Database.ExecuteSqlRawAsync("UPDATE devices SET is_active = 1 WHERE is_active = 0");
     await EnsureIndexDroppedAsync(db, "devices", "idx_devices_loai");
     await EnsureIndexDroppedAsync(db, "devices", "idx_devices_phong_ban");
@@ -1419,6 +1481,39 @@ static async Task EnsureEmployeeCostCenterTableAsync(WareHubDbContext db)
             cost_center VARCHAR(50) NOT NULL,
             imported_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             UNIQUE INDEX IX_employee_cost_centers_employee_id (`employee_id`)
+        )
+        """);
+}
+static async Task UpsertPrintLabelOverridesAsync(WareHubDbContext db, Dictionary<string, string?> overrides)
+{
+    var now = DateTime.Now;
+    var keys = overrides.Keys.ToList();
+    var strategy = db.Database.CreateExecutionStrategy();
+    await strategy.ExecuteAsync(async () =>
+    {
+        await using var tx = await db.Database.BeginTransactionAsync();
+        var existing = await db.PrintLabelOverrides.Where(x => keys.Contains(x.LabelKey)).ToDictionaryAsync(x => x.LabelKey);
+        foreach (var (key, value) in overrides)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                if (existing.TryGetValue(key, out var toRemove)) db.PrintLabelOverrides.Remove(toRemove);
+                continue;
+            }
+            if (existing.TryGetValue(key, out var row)) row.Value = value;
+            else db.PrintLabelOverrides.Add(new PrintLabelOverride { LabelKey = key, Value = value, UpdatedAt = now });
+        }
+        await db.SaveChangesAsync();
+        await tx.CommitAsync();
+    });
+}
+static async Task EnsurePrintLabelOverrideTableAsync(WareHubDbContext db)
+{
+    await db.Database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS print_label_overrides (
+            label_key VARCHAR(100) NOT NULL PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
         )
         """);
 }

@@ -70,7 +70,7 @@ export function ConnectionProvider({ children }) {
     if (!health) return false;
     if (health.maintenance && !adminRef.current) {
       let info = { state: 'maintenance' };
-      try { const detail = await (await fetch('/api/maintenance', { cache: 'no-store' })).json(); info = { state: 'maintenance', message: detail.message, until: detail.until }; } catch {}
+      try { const detail = await (await fetchWithTimeout('/api/maintenance', { timeoutMs: 5000, cache: 'no-store' })).json(); info = { state: 'maintenance', message: detail.message, until: detail.until }; } catch {}
       if (!userRef.current && serverStateRef.current === 'ok') { setLoginNotice(info); return false; }
       markProblem(info);
       return false;

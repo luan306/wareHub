@@ -46,7 +46,7 @@ async function request(path, { method = 'GET', body, params, formData, timeoutMs
   const data = isJson ? await res.json().catch(() => ({})) : {};
 
   if (res.status === 503 && data.maintenance) {
-    connectionEvents.emit({ type: 'maintenance', message: data.error, until: data.until });
+    if (path !== '/auth/login') connectionEvents.emit({ type: 'maintenance', message: data.error, until: data.until });
     throw new ApiError(translateServerMessage(data.error), { status: 503, code: 'maintenance' });
   }
   if (!res.ok && !isJson && res.status >= 500) {

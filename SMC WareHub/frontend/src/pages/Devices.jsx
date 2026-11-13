@@ -32,7 +32,7 @@ const COLUMN_DEFS = [
   { key: 'sim_serial', labelKey: 'field.sim_serial', defaultHidden: true, cell: (d) => d.sim_serial || '—' },
   { key: 'ghi_chu', labelKey: 'field.ghi_chu', cell: (d) => d.ghi_chu || '—' },
   { key: 'registered_at', labelKey: 'field.date', cell: (d) => (d.registered_at ? d.registered_at.slice(0, 10) : '—') },
-  { key: 'updated_at', labelKey: 'field.updated_at', cell: (d) => (d.updated_at ? new Date(d.updated_at).toLocaleString('vi-VN') : '—') },
+  { key: 'updated_at', labelKey: 'field.updated_at', cell: (d, t, locale) => (d.updated_at ? new Date(d.updated_at).toLocaleString(locale) : '—') },
 ];
 function syncProgressLabel(progress, t) {
   if (!progress?.phase) return t('dev.syncing');
@@ -82,7 +82,7 @@ const deviceToFormFields = (device) => ({
 
 export function Devices() {
   const { isAdmin } = useAuth();
-  const { t } = useT();
+  const { t, locale } = useT();
   const { queue, addDevices, removeDevice, clearQueue } = usePrintQueue();
 
   const [devices, setDevices] = useState([]);
@@ -689,7 +689,7 @@ export function Devices() {
                   </>}
                 </div>
               </td>
-              {visibleColumns.map((c) => <td key={c.key} className={c.className} data-label={t(c.labelKey)}>{c.cell(d, t)}</td>)}
+              {visibleColumns.map((c) => <td key={c.key} className={c.className} data-label={t(c.labelKey)}>{c.cell(d, t, locale)}</td>)}
             </tr>
           ))}
         </tbody>

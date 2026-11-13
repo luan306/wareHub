@@ -25,6 +25,7 @@ const NAV_GROUPS = [
     items: [
       { to: '/lich-su-sua', icon: '✎', labelKey: 'nav.editHistory' },
       { to: '/nguoi-dung', icon: '♙', labelKey: 'nav.users' },
+      { to: '/mau-in', icon: '🖹', labelKey: 'nav.printTemplates' },
     ],
   },
 ];

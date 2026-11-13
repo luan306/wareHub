@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { QRCodeCanvas, QRCodeSVG } from 'qrcode.react';
 import { useT } from '../i18n';
 import { isoToday } from '../utils/date';
@@ -15,6 +15,25 @@ export function qrPayload(device) {
   return String(device.ma || '').trim();
 }
 
+function largestFitSize(fits, min, max, { integer = false, iterations = 8 } = {}) {
+  if (fits(max)) return max;
+  if (!fits(min)) return min;
+  let lo = min;
+  let hi = max;
+  if (integer) {
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (fits(mid)) lo = mid; else hi = mid - 1;
+    }
+    return lo;
+  }
+  for (let i = 0; i < iterations; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (fits(mid)) lo = mid; else hi = mid;
+  }
+  return lo;
+}
+
 function FitText({ text }) {
   const ref = useRef(null);
   const [style, setStyle] = useState({ fontSize: FIT_TEXT_MAX_SIZE, whiteSpace: 'nowrap' });
@@ -29,17 +48,8 @@ function FitText({ text }) {
       return el.scrollWidth <= el.clientWidth;
     };
 
-    let size = FIT_TEXT_MAX_SIZE;
-    if (!fits(size)) {
-      let lo = FIT_TEXT_MIN_SIZE;
-      let hi = FIT_TEXT_MAX_SIZE;
-      while (lo < hi) {
-        const mid = Math.ceil((lo + hi) / 2);
-        if (fits(mid)) lo = mid; else hi = mid - 1;
-      }
-      size = lo;
-      fits(size);
-    }
+    const size = largestFitSize(fits, FIT_TEXT_MIN_SIZE, FIT_TEXT_MAX_SIZE, { integer: true });
+    fits(size);
 
     const whiteSpace = el.scrollWidth > el.clientWidth ? 'normal' : 'nowrap';
     el.style.whiteSpace = whiteSpace;
@@ -73,25 +83,18 @@ function measureWidth(text, sizePx, weight = 400, family = 'inherit') {
 function fitFontSize(text, widthPx, { min, max, weight = 400, family = 'inherit' }) {
   const limit = widthPx * FIT_MARGIN;
   const fits = (size) => measureWidth(text, size, weight, family) <= limit;
-  if (fits(max)) return max;
-  if (!fits(min)) return min;
-  let lo = min;
-  let hi = max;
-  for (let i = 0; i < 8; i += 1) {
-    const mid = (lo + hi) / 2;
-    if (fits(mid)) lo = mid; else hi = mid;
-  }
-  return Math.floor(lo * 10) / 10;
+  return Math.floor(largestFitSize(fits, min, max) * 10) / 10;
 }
 
 function useFontsReady() {
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     if (!document.fonts?.addEventListener) return undefined;
-    const bump = () => setTick((tick) => tick + 1);
+    const bump = () => setTick((t) => t + 1);
     document.fonts.addEventListener('loadingdone', bump);
     return () => document.fonts.removeEventListener('loadingdone', bump);
   }, []);
+  return tick;
 }
 
 const PRINT_TEXT_BASE = 9.5;
@@ -106,8 +109,8 @@ function printTextSize(text) {
 }
 
 function PrintText({ text }) {
-  useFontsReady();
-  const size = printTextSize(text);
+  const fontsTick = useFontsReady();
+  const size = useMemo(() => printTextSize(text), [text, fontsTick]);
   return <div className="print-value-text" style={{ fontSize: `${size.toFixed(1)}px` }}>{text}</div>;
 }
 

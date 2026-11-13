@@ -113,6 +113,14 @@ public sealed class EmployeeCostCenter
     [Column("imported_at")] public DateTime ImportedAt { get; set; }
 }
 
+[Table("print_label_overrides")]
+public sealed class PrintLabelOverride
+{
+    [Column("label_key")] public string LabelKey { get; set; } = "";
+    [Column("value")] public string Value { get; set; } = "";
+    [Column("updated_at")] public DateTime UpdatedAt { get; set; }
+}
+
 [Table("handovers")]
 public sealed class Handover
 {

@@ -4,8 +4,8 @@ import { api } from '../api/client';
 import { printHandoverSheets } from '../utils/printPageSize';
 import { LOAI_LABELS, LOAI_LABELS_EN } from '../utils/deviceTypes';
 import { useT } from '../i18n';
-import { useAuth } from '../context/AuthContext';
 import { LdapAutocompleteField } from './LdapAutocompleteField';
+import { usePrintLabels } from '../context/PrintLabelsContext';
 import smcLogo from '../img/Logo_SMC_Corporation.svg';
 
 export function buildLoanData() {
@@ -128,99 +128,105 @@ function SignaturePad({ onChange }) {
   );
 }
 
-export function LoanSheet({ no, data, returnedAt, createdByName }) {
-  const devices = data.devices || [];
+const LOAN_ROWS_PER_PAGE = 26;
+
+export function LoanSheet({ no, data, returnedAt }) {
+  const devices = data.devices?.length > 0 ? data.devices : [null];
+  const { label } = usePrintLabels();
+  const pageCount = Math.max(1, Math.ceil(devices.length / LOAN_ROWS_PER_PAGE));
+  const pages = Array.from({ length: pageCount }, (_, p) => devices.slice(p * LOAN_ROWS_PER_PAGE, (p + 1) * LOAN_ROWS_PER_PAGE));
+
   return (
-    <div className="hv-sheet">
-      <div className="hv-head">
-        <img src={smcLogo} alt="SMC" />
-        <div className="hv-title">
-          <h1>IT EQUIPMENT LOAN SLIP</h1>
-          <p>PHIẾU MƯỢN THIẾT BỊ IT</p>
-        </div>
-        <div className="hv-formno">&nbsp;</div>
-      </div>
+    <>
+      {pages.map((rows, pageIndex) => {
+        const isLast = pageIndex === pageCount - 1;
+        return (
+          <div className="hv-sheet" key={pageIndex}>
+            <div className="hv-head">
+              <img src={smcLogo} alt="SMC" />
+              <div className="hv-title">
+                <h1>{label('loan.title_en')}</h1>
+                <p>{label('loan.title_vi')}</p>
+              </div>
+              <div className="hv-formno">{pageCount > 1 ? `page ${pageIndex + 1}/${pageCount}` : <>&nbsp;</>}</div>
+            </div>
 
-      <div className="hv-reg">
-        <span />
-        <span className="hv-no">No.: <b>{no}</b></span>
-      </div>
+            <div className="hv-reg">
+              <span />
+              <span className="hv-no">No.: <b>{no}</b></span>
+            </div>
 
-      <table className="hv-info">
-        <colgroup><col style={{ width: '22%' }} /><col style={{ width: '28%' }} /><col style={{ width: '22%' }} /><col style={{ width: '28%' }} /></colgroup>
-        <tbody>
-          <tr>
-            <th>Employee ID <i className="hv-vi-inline">(Mã số NV)</i>:</th>
-            <td className="hv-center">{data.employee_id || '—'}</td>
-            <th>Full name <i className="hv-vi-inline">(Họ Tên)</i>:</th>
-            <td className="hv-center">{data.borrower_name}</td>
-          </tr>
-          <tr>
-            <th>Department <i className="hv-vi-inline">(Bộ phận)</i>:</th>
-            <td className="hv-center">{data.department || '—'}</td>
-            <th>Cost center <i className="hv-vi-inline">(Cost center)</i>:</th>
-            <td className="hv-center">{data.cost_center || '—'}</td>
-          </tr>
-          <tr>
-            <th>Borrow time <i className="hv-vi-inline">(Thời gian mượn)</i>:</th>
-            <td className="hv-center">{formatDateTimeDisplay(data.borrowed_at)}</td>
-            <th>Expected return <i className="hv-vi-inline">(Thời gian trả dự kiến)</i>:</th>
-            <td className="hv-center">{data.due_at ? formatDateTimeDisplay(data.due_at) : 'N/A'}</td>
-          </tr>
-          <tr>
-            <th>Actual return <i className="hv-vi-inline">(Ngày trả thực tế)</i>:</th>
-            <td className="hv-center" colSpan="3">{returnedAt ? formatDateTimeDisplay(returnedAt) : ' '}</td>
-          </tr>
-        </tbody>
-      </table>
+            <table className="hv-info">
+              <colgroup><col style={{ width: '22%' }} /><col style={{ width: '28%' }} /><col style={{ width: '22%' }} /><col style={{ width: '28%' }} /></colgroup>
+              <tbody>
+                <tr>
+                  <th>{label('loan.field_full_name_en')} <i className="hv-vi-inline">({label('loan.field_full_name_vi')})</i>:</th>
+                  <td className="hv-center">{data.borrower_name}</td>
+                  <th>{label('loan.field_department_en')} <i className="hv-vi-inline">({label('loan.field_department_vi')})</i>:</th>
+                  <td className="hv-center">{data.department || '—'}</td>
+                </tr>
+                <tr>
+                  <th>{label('loan.field_employee_id_en')} <i className="hv-vi-inline">({label('loan.field_employee_id_vi')})</i>:</th>
+                  <td className="hv-center">{data.employee_id || '—'}</td>
+                  <th>{label('loan.field_cost_center_en')} <i className="hv-vi-inline">({label('loan.field_cost_center_vi')})</i>:</th>
+                  <td className="hv-center">{data.cost_center || '—'}</td>
+                </tr>
+              </tbody>
+            </table>
 
-      <div className="hv-band hv-band-gap">DEVICES ON LOAN — THIẾT BỊ CHO MƯỢN</div>
-      <table className="hv-attach-table">
-        <colgroup>
-          <col style={{ width: '8%' }} /><col style={{ width: '27%' }} /><col style={{ width: '25%' }} />
-          <col style={{ width: '18%' }} /><col style={{ width: '22%' }} />
-        </colgroup>
-        <thead>
-          <tr><th>#</th><th>Device Name</th><th>Serial Number</th><th>Type</th><th>Model</th></tr>
-        </thead>
-        <tbody>
-          {devices.map((item, index) => (
-            <tr key={item.id}>
-              <td className="hv-center">{index + 1}</td>
-              <td className="hv-center">{item.ten || '—'}</td>
-              <td className="hv-center mono">{item.ma || '—'}</td>
-              <td className="hv-center">{LOAI_LABELS_EN[item.loai] || item.loai}</td>
-              <td className="hv-center">{item.model || '—'}</td>
-            </tr>
-          ))}
-          {devices.length === 0 && <tr><td colSpan="5" className="hv-center">—</td></tr>}
-        </tbody>
-      </table>
+            <div className="hv-band hv-band-gap">{label('loan.band_devices')}</div>
+            <table className="hv-attach-table">
+              <colgroup>
+                <col style={{ width: '8%' }} /><col style={{ width: '27%' }} /><col style={{ width: '25%' }} />
+                <col style={{ width: '18%' }} /><col style={{ width: '22%' }} />
+              </colgroup>
+              <thead>
+                <tr><th>{label('loan.col_no')}</th><th>{label('loan.col_device_name')}</th><th>{label('loan.col_serial')}</th><th>{label('loan.col_type')}</th><th>{label('loan.col_model')}</th></tr>
+              </thead>
+              <tbody>
+                {rows.map((item, index) => item === null ? (
+                  <tr key="empty"><td colSpan="5" className="hv-center">—</td></tr>
+                ) : (
+                  <tr key={item.id}>
+                    <td className="hv-center">{pageIndex * LOAN_ROWS_PER_PAGE + index + 1}</td>
+                    <td className="hv-center">{item.ten || '—'}</td>
+                    <td className="hv-center mono">{item.ma || '—'}</td>
+                    <td className="hv-center">{LOAI_LABELS_EN[item.loai] || item.loai}</td>
+                    <td className="hv-center">{item.model || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
 
-      {data.notes && (
-        <>
-          <div className="hv-band hv-band-gap">NOTES — GHI CHÚ</div>
-          <table className="hv-info"><tbody><tr><td>{data.notes}</td></tr></tbody></table>
-        </>
-      )}
+            {isLast && data.notes && (
+              <>
+                <div className="hv-band hv-band-gap">{label('loan.band_notes')}</div>
+                <table className="hv-info"><tbody><tr><td>{data.notes}</td></tr></tbody></table>
+              </>
+            )}
 
-      <div className="hv-signs">
-        <table>
-          <colgroup /><thead><tr><th className="hv-sign-title">IT DEPARTMENT — BỘ PHẬN IT</th></tr></thead>
-          <tbody><tr className="hv-sign-space"><td className="hv-center">{createdByName}</td></tr></tbody>
-        </table>
-        <table>
-          <thead><tr><th className="hv-sign-title">BORROWER'S SIGNATURE — CHỮ KÝ NGƯỜI MƯỢN</th></tr></thead>
-          <tbody>
-            <tr className="hv-sign-space">
-              <td className="hv-center">
-                {data.signature && <img src={data.signature} alt="signature" className="loan-sig-img" />}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
+            {isLast && (
+              <div className="hv-signs">
+                <table>
+                  <colgroup /><thead><tr><th className="hv-sign-title">{label('loan.sign_borrower')}</th></tr></thead>
+                  <tbody>
+                    <tr className="hv-sign-space">
+                      <td className="hv-center">
+                        {data.signature && <img src={data.signature} alt="signature" className="loan-sig-img" />}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <table>
+                  <thead><tr><th className="hv-sign-title">{label('loan.sign_return_date')}</th></tr></thead>
+                  <tbody><tr className="hv-sign-space"><td className="hv-center">{returnedAt ? formatDateTimeDisplay(returnedAt) : ' '}</td></tr></tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </>
   );
 }
 
@@ -279,10 +285,8 @@ function LoanDevicePicker({ excludeIds, onPick, onCancel }) {
 
 export function LoanModal({ saved, onClose }) {
   const { t } = useT();
-  const { user } = useAuth();
   const isReturned = saved?.status === 'returned';
   const editableFields = !saved || !isReturned;
-  const createdByName = saved?.created_by_name || user?.full_name || '';
   const [allocated, setAllocated] = useState(saved ? { id: saved.id, no: saved.no } : null);
   const [data, setData] = useState(() => (saved ? {
     borrower_name: saved.borrower_name || '',
@@ -499,7 +503,7 @@ export function LoanModal({ saved, onClose }) {
               </fieldset>
             </div>
             <div className="hv-preview">
-              <LoanSheet no={sheetNo} data={data} returnedAt={saved?.returned_at} createdByName={createdByName} />
+              <LoanSheet no={sheetNo} data={data} returnedAt={saved?.returned_at} />
             </div>
           </div>
           <div className="modal-actions modal-footer">
@@ -519,7 +523,7 @@ export function LoanModal({ saved, onClose }) {
       </div>
       {createPortal(
         <div className="handover-print-root">
-          <LoanSheet no={sheetNo} data={data} returnedAt={saved?.returned_at} createdByName={createdByName} />
+          <LoanSheet no={sheetNo} data={data} returnedAt={saved?.returned_at} />
         </div>,
         document.body,
       )}

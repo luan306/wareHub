@@ -40,7 +40,14 @@ export function QrLibrary() {
         headers: { Authorization: `Bearer ${token}` },
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error('Không tải được mã QR');
+      if (!response.ok) {
+        if (response.status === 401) {
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          window.location.href = '/login';
+        }
+        throw new Error('Không tải được mã QR');
+      }
       return [device.id, URL.createObjectURL(await response.blob())];
     })).then((entries) => {
       setQrUrls((previous) => {
